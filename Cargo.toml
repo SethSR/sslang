@@ -1,0 +1,8 @@
+[package]
+name = "sslisp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+miette = { version = "7.2.0", features = ["fancy"] }
+nom = "7.0"

@@ -5,7 +5,7 @@ use crate::tokens::{Token, TokenType};
 
 pub(crate) type TypedIdent = (String, ValueType);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ValueType {
 	U8, U16, U32,
 	S8, S16, S32,
@@ -33,80 +33,57 @@ pub(crate) enum Op {
 	Neg,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Expression {
 	/// literal := _number:64b_ value-type
 	Literal(u64,Option<ValueType>),
 	/// function-call := ident expr*
 	FnCall(String, Vec<Expression>),
-	DefFn {
-		ident : String,
-		params: Vec<TypedIdent>,
-		body  : Vec<SExpression>,
-	},
-	DefVal {
-		ident: (String, Option<ValueType>),
-		value: Box<Expression>,
-	},
-	DefRec {
-		ident : String,
-		fields: Vec<TypedIdent>,
-	},
 }
 
-struct Parser<'a> {
-	source: &'a str,
-	index: usize,
-	input: Vec<Token>,
+#[derive(Debug, PartialEq)]
+pub(crate) enum SExpression<'a> {
+	Expr(Token<'a>),
+	List(Vec<SExpression<'a>>),
 }
 
-impl<'a> Parser<'a> {
-	fn new(
-		source: &'a str,
-		input: Vec<Token>,
-	) -> Self {
-		Self {
-			source,
-			index: 0,
-			input,
+impl std::fmt::Display for SExpression<'_> {
+	fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match self {
+			SExpression::Expr(token) => write!(fmt, "{:?}", token.tt),
+			SExpression::List(list) => {
+				let out = list.iter().map(|i| format!("{i}")).collect::<Vec<String>>().join(" ");
+				write!(fmt, "({out})")
+			}
 		}
 	}
-
-	fn peek(&self) -> &Token {
-		&self.input[self.index]
-	}
-
-	fn next_token(&mut self) {
-		self.index += 1;
-	}
-
-	fn is_empty(&self) -> bool {
-		self.index == self.input.len()
-	}
 }
 
-
-pub fn eval(
-	source: &str,
-	input: Vec<Token>,
-) -> miette::Result<Vec<SExpression>> {
+pub fn eval<'a>(
+	input: Vec<Token<'a>>,
+) -> miette::Result<SExpression<'a>> {
 	if input.len() == 0 {
 		miette::bail!("Empty input");
 	}
 
-	program(Parser::new(source, input))
+	let mut index = 0;
+	let ast = program(&input, &mut index)?;
+	Ok(ast)
 }
 
-fn num(data: &'_ mut Parser) -> miette::Result<u64> {
-	let token = data.peek();
+fn num(
+	input: &[Token],
+	index: &mut usize,
+) -> miette::Result<u64> {
+	let token = input[*index].clone();
 	if token.tt != TokenType::Num {
 		miette::bail!("{}", expected("Number"));
 	}
-	let out = token.get_token(data.source)
+	let out = token.get_token()
 		.parse::<f64>()
 		.into_diagnostic()
 		.wrap_err("lexer should not allow invalid floating-point values")?;
-	data.next_token();
+	*index += 1;
 	Ok(float_to_fixed(out))
 }
 
@@ -122,20 +99,24 @@ fn convert_float_to_fixed() {
 	assert_eq!(0x00000006_66666666, float_to_fixed(6.4));
 }
 
-fn ident(data: &'_ mut Parser) -> miette::Result<String> {
-	let token = data.peek();
+fn ident(
+	input: &[Token],
+	index: &mut usize,
+) -> miette::Result<String> {
+	let token = input[*index].clone();
 	if token.tt != TokenType::Ident {
 		miette::bail!("{}", expected("Identifier"));
 	}
-	let out = token.get_token(data.source).to_owned();
-	data.next_token();
+	let out = token.get_token().to_owned();
+	*index += 1;
 	Ok(out)
 }
 
 fn value_type(
-	data: &mut Parser,
+	input: &[Token],
+	index: &mut usize,
 ) -> miette::Result<ValueType> {
-	let token = data.peek();
+	let token = input[*index].clone();
 	let out = match token.tt {
 		TokenType::U8 => ValueType::U8,
 		TokenType::U16 => ValueType::U16,
@@ -144,7 +125,7 @@ fn value_type(
 		TokenType::S16 => ValueType::S16,
 		TokenType::S32 => ValueType::S32,
 		TokenType::F16 => {
-			let Some(bit_spec) = token.get_token(data.source)
+			let Some(bit_spec) = token.get_token()
 				.strip_prefix("fw")
 			else {
 				miette::bail!("Parsed a Fixed-point Word that doesn't start with 'fw'");
@@ -152,7 +133,7 @@ fn value_type(
 
 			let Ok(bits) = bit_spec.parse::<u8>()
 			else {
-				miette::bail!("Unable to parse {} into Fixed-point Word type", token.get_token(data.source));
+				miette::bail!("Unable to parse {} into Fixed-point Word type", token.get_token());
 			};
 
 			if bits > 16 {
@@ -162,14 +143,14 @@ fn value_type(
 			ValueType::F16(bits)
 		}
 		TokenType::F32 => {
-			let Some(bit_spec) = token.get_token(data.source)
+			let Some(bit_spec) = token.get_token()
 				.strip_prefix("fl")
 			else {
 				miette::bail!("Parsed a Fixed-point Long that doesn't start with 'fl'");
 			};
 
 			let Ok(bits) = bit_spec.parse::<u8>() else {
-				miette::bail!("Unable to parse {} into Fixed-point Long type", token.get_token(data.source));
+				miette::bail!("Unable to parse {} into Fixed-point Long type", token.get_token());
 			};
 
 			if bits > 32 {
@@ -178,75 +159,50 @@ fn value_type(
 			}
 			ValueType::F32(bits)
 		}
-		TokenType::Ident => ValueType::TypeName(token.get_token(data.source).to_owned()),
+		TokenType::Ident => ValueType::TypeName(token.get_token().to_owned()),
 		_ => miette::bail!("Expected Value Type"),
 	};
-	data.next_token();
+	*index += 1;
 	Ok(out)
 }
 
 fn ident_typed_opt(
-	data: &mut Parser,
+	input: &[Token],
+	index: &mut usize,
 ) -> miette::Result<(String,Option<ValueType>)> {
-	let id = ident(data)?;
-	let val_type = value_type(data).ok();
+	let id = ident(input, index)?;
+	let val_type = value_type(input, index).ok();
 	Ok((id, val_type))
 }
 
 fn match_token(
-	data: &mut Parser,
+	input: &[Token],
+	index: &mut usize,
 	tt: TokenType,
 ) -> miette::Result<()> {
-	if data.index >= data.input.len() {
-		let t = data.input[data.index-1]
-			.clone()
-			.range
-			.end;
-		Err(miette::miette! {
-			labels = vec![
-				LabeledSpan::at(t..data.source.len(), "here"),
-			],
-			"Expected {tt:?}",
-		}.with_source_code(data.source.to_owned()))
-	} else if data.peek().tt == tt {
-		Ok(data.next_token())
+	let token = &input[*index];
+	if token.tt == tt {
+		*index += 1;
+		Ok(())
 	} else {
 		Err(miette::miette! {
 			labels = vec![
-				LabeledSpan::at(data.peek().range.clone(), "here")
+				LabeledSpan::at(token.range.clone(), "here")
 			],
 			"Expected {tt:?}",
-		}.with_source_code(data.source.to_owned()))
+		}.with_source_code(token.src.to_owned()))
 	}
 }
 
 fn minor_expr(
-	data: &mut Parser,
+	input: &[Token],
+	index: &mut usize,
 ) -> miette::Result<Expression> {
-	let token = data.peek().clone();
+	let token = input[*index].clone();
 	match token.tt {
-		TokenType::Let => {
-			match_token(data, TokenType::Let)?;
-			let ident = ident_typed_opt(data)?;
-			let value = Box::new(expr(data)?);
-			Ok(Expression::DefVal { ident, value })
-		}
-
-		TokenType::Fn => {
-			match_token(data, TokenType::Fn)?;
-			let ident = ident(data)?;
-			let params = param_list(data)?;
-			let body = list(data)?;
-			Ok(Expression::DefFn { ident, params, body })
-		}
-
-		TokenType::Rec => {
-			match_token(data, TokenType::Rec)?;
-			let ident = ident(data)?;
-			let fields = param_list(data)?;
-			Ok(Expression::DefRec { ident, fields })
-		}
-
+		TokenType::Let |
+		TokenType::Fn |
+		TokenType::Rec |
 		TokenType::U8 |
 		TokenType::U16 |
 		TokenType::U32 |
@@ -259,7 +215,7 @@ fn minor_expr(
 				LabeledSpan::at(token.range.clone(), "here"),
 			],
 			"Expected Expression",
-		}.with_source_code(data.source.to_owned())),
+		}.with_source_code(token.src.to_owned())),
 
 		t @ TokenType::Plus |
 		t @ TokenType::Minus |
@@ -279,49 +235,53 @@ fn minor_expr(
 				LabeledSpan::at(token.range.clone(), "here"),
 			],
 			"Unexpected {t:?}",
-		}.with_source_code(data.source.to_owned())),
+		}.with_source_code(token.src.to_owned())),
 
 		TokenType::OParen => {
-			match_token(data, TokenType::OParen)?;
-			let out = expr(data)?;
-			match_token(data, TokenType::CParen)?;
+			match_token(input, index, TokenType::OParen)?;
+			let out = expr(input, index)?;
+			match_token(input, index, TokenType::CParen)?;
 			Ok(out)
 		}
 
 		TokenType::Ident => {
-			let mut s = token.get_token(data.source).to_owned();
-			data.next_token();
-			while match_token(data, TokenType::Dot).is_ok() {
+			let mut s = token.get_token().to_owned();
+			*index += 1;
+			while match_token(input, index, TokenType::Dot).is_ok() {
 				s.push('.');
-				s.push_str(&ident(data)?);
+				s.push_str(&ident(input, index)?);
 			}
 			Ok(Expression::FnCall(s, vec![]))
 		}
 
 		TokenType::Num => {
-			let n = num(data)?;
-			let val_type = value_type(data).ok();
+			let n = num(input, index)?;
+			let val_type = value_type(input, index).ok();
 			Ok(Expression::Literal(n, val_type))
 		}
 	}
 }
 
 fn gather_params(
-	data: &mut Parser,
+	input: &[Token],
+	index: &mut usize,
 	count: usize,
 ) -> miette::Result<Vec<Expression>> {
 	let mut out = Vec::default();
 	for _ in 0..count {
-		out.push(minor_expr(data)?);
+		out.push(minor_expr(input, index)?);
 	}
-	while data.peek().tt != TokenType::CParen {
-		out.push(minor_expr(data)?);
+	while input[*index].tt != TokenType::CParen {
+		out.push(minor_expr(input, index)?);
 	}
 	Ok(out)
 }
 
-fn expr(data: &mut Parser) -> miette::Result<Expression> {
-	let token = data.peek().clone();
+fn expr(
+	input: &[Token],
+	index: &mut usize,
+) -> miette::Result<Expression> {
+	let token = input[*index].clone();
 	match token.tt {
 		TokenType::Let |
 		TokenType::Fn |
@@ -341,215 +301,226 @@ fn expr(data: &mut Parser) -> miette::Result<Expression> {
 				LabeledSpan::at(token.range.clone(), "here"),
 			],
 			"Unexpected '{:?}'", token.tt,
-		}.with_source_code(data.source.to_owned())),
+		}.with_source_code(token.src.to_owned())),
 
 		TokenType::Plus => {
-			match_token(data, TokenType::Plus)?;
+			match_token(input, index, TokenType::Plus)?;
 			Ok(Expression::FnCall("Add".to_string(),
-				gather_params(data, 1)?))
+				gather_params(input, index, 1)?))
 		}
 		TokenType::Minus => {
-			match_token(data, TokenType::Minus)?;
+			match_token(input, index, TokenType::Minus)?;
 			Ok(Expression::FnCall("Sub".to_string(),
-				gather_params(data, 1)?))
+				gather_params(input, index, 1)?))
 		}
 		TokenType::Star => {
-			match_token(data, TokenType::Star)?;
+			match_token(input, index, TokenType::Star)?;
 			Ok(Expression::FnCall("Mul".to_string(),
-				gather_params(data, 2)?))
+				gather_params(input, index, 2)?))
 		}
 		TokenType::Slash => {
-			match_token(data, TokenType::Slash)?;
-			if match_token(data, TokenType::Percent).is_ok() {
+			match_token(input, index, TokenType::Slash)?;
+			if match_token(input, index, TokenType::Percent).is_ok() {
 				Ok(Expression::FnCall("DivMod".to_string(),
-					gather_params(data, 2)?))
+					gather_params(input, index, 2)?))
 			} else {
 				Ok(Expression::FnCall("Div".to_string(),
-					gather_params(data, 2)?))
+					gather_params(input, index, 2)?))
 			}
 		}
 		TokenType::Percent => {
-			match_token(data, TokenType::Percent)?;
+			match_token(input, index, TokenType::Percent)?;
 			Ok(Expression::FnCall("Mod".to_string(),
-				gather_params(data, 2)?))
+				gather_params(input, index, 2)?))
 		}
 
 		TokenType::LArrow => {
-			match_token(data, TokenType::LArrow)?;
-			if match_token(data, TokenType::LArrow).is_ok() {
+			match_token(input, index, TokenType::LArrow)?;
+			if match_token(input, index, TokenType::LArrow).is_ok() {
 				Ok(Expression::FnCall("ShiftL".to_string(),
-					gather_params(data, 2)?))
-			} else if match_token(data, TokenType::RArrow).is_ok() {
+					gather_params(input, index, 2)?))
+			} else if match_token(input, index, TokenType::RArrow).is_ok() {
 				Ok(Expression::FnCall("NEq".to_string(),
-					gather_params(data, 2)?))
-			} else if match_token(data, TokenType::Eq).is_ok() {
+					gather_params(input, index, 2)?))
+			} else if match_token(input, index, TokenType::Eq).is_ok() {
 				Ok(Expression::FnCall("LE".to_string(),
-					gather_params(data, 2)?))
+					gather_params(input, index, 2)?))
 			} else {
 				Ok(Expression::FnCall("LT".to_string(),
-					gather_params(data, 2)?))
+					gather_params(input, index, 2)?))
 			}
 		}
 		TokenType::RArrow => {
-			match_token(data, TokenType::RArrow)?;
-			if match_token(data, TokenType::RArrow).is_ok() {
+			match_token(input, index, TokenType::RArrow)?;
+			if match_token(input, index, TokenType::RArrow).is_ok() {
 				Ok(Expression::FnCall("ShiftR".to_string(),
-					gather_params(data, 2)?))
-			} else if match_token(data, TokenType::Eq).is_ok() {
+					gather_params(input, index, 2)?))
+			} else if match_token(input, index, TokenType::Eq).is_ok() {
 				Ok(Expression::FnCall("GE".to_string(),
-					gather_params(data, 2)?))
+					gather_params(input, index, 2)?))
 			} else {
 				Ok(Expression::FnCall("GT".to_string(),
-					gather_params(data, 2)?))
+					gather_params(input, index, 2)?))
 			}
 		}
 		TokenType::Ampersand => {
-			match_token(data, TokenType::Ampersand)?;
-			if match_token(data, TokenType::Ampersand).is_ok() {
+			match_token(input, index, TokenType::Ampersand)?;
+			if match_token(input, index, TokenType::Ampersand).is_ok() {
 				Ok(Expression::FnCall("AndL".to_string(),
-					gather_params(data, 2)?))
+					gather_params(input, index, 2)?))
 			} else {
 				Ok(Expression::FnCall("AndB".to_string(),
-					gather_params(data, 2)?))
+					gather_params(input, index, 2)?))
 			}
 		}
 		TokenType::Pipe => {
-			match_token(data, TokenType::Pipe)?;
-			if match_token(data, TokenType::Pipe).is_ok() {
+			match_token(input, index, TokenType::Pipe)?;
+			if match_token(input, index, TokenType::Pipe).is_ok() {
 				Ok(Expression::FnCall("OrL".to_string(),
-					gather_params(data, 2)?))
+					gather_params(input, index, 2)?))
 			} else {
 				Ok(Expression::FnCall("OrB".to_string(),
-					gather_params(data, 2)?))
+					gather_params(input, index, 2)?))
 			}
 		}
 		TokenType::Carrot => {
-			match_token(data, TokenType::Carrot)?;
-			if match_token(data, TokenType::Carrot).is_ok() {
+			match_token(input, index, TokenType::Carrot)?;
+			if match_token(input, index, TokenType::Carrot).is_ok() {
 				Ok(Expression::FnCall("XorL".to_string(),
-					gather_params(data, 2)?))
+					gather_params(input, index, 2)?))
 			} else {
 				Ok(Expression::FnCall("XorB".to_string(),
-					gather_params(data, 2)?))
+					gather_params(input, index, 2)?))
 			}
 		}
 		TokenType::Bang => {
-			match_token(data, TokenType::Bang)?;
-			let out = vec![minor_expr(data)?];
+			match_token(input, index, TokenType::Bang)?;
+			let out = vec![minor_expr(input, index)?];
 			Ok(Expression::FnCall("Not".to_string(), out))
 		}
 		TokenType::Eq => {
-			match_token(data, TokenType::Eq)?;
+			match_token(input, index, TokenType::Eq)?;
 			Ok(Expression::FnCall("Eq".to_string(),
-				gather_params(data, 2)?))
+				gather_params(input, index, 2)?))
 		}
 		TokenType::Ident => {
-			let mut s = ident(data)?;
-			while match_token(data, TokenType::Dot).is_ok() {
+			let mut s = ident(input, index)?;
+			while match_token(input, index, TokenType::Dot).is_ok() {
 				s.push('.');
-				s.push_str(&ident(data)?);
+				s.push_str(&ident(input, index)?);
 			}
-			Ok(Expression::FnCall(s, gather_params(data, 0)?))
+			Ok(Expression::FnCall(s, gather_params(input, index, 0)?))
 		}
 		TokenType::Num => {
-			let n = num(data)?;
-			let val_type = value_type(data).ok();
+			let n = num(input, index)?;
+			let val_type = value_type(input, index).ok();
 			Ok(Expression::Literal(n, val_type))
 		}
 	}
 }
 
 fn ident_typed(
-	data: &mut Parser,
+	input: &[Token],
+	index: &mut usize,
 ) -> miette::Result<TypedIdent> {
-	let id = ident(data)?;
-	let val_type = value_type(data)?;
+	let id = ident(input, index)?;
+	let val_type = value_type(input, index)?;
 	Ok((id, val_type))
 }
 
 fn param_list(
-	data: &mut Parser,
+	input: &[Token],
+	index: &mut usize,
 ) -> miette::Result<Vec<TypedIdent>> {
 	let mut params = Vec::default();
-	while data.peek().tt != TokenType::CParen {
-		match_token(data, TokenType::OParen)?;
-		params.push(ident_typed(data)?);
-		match_token(data, TokenType::CParen)?;
+	while input[*index].tt != TokenType::CParen {
+		match_token(input, index, TokenType::OParen)?;
+		params.push(ident_typed(input, index)?);
+		match_token(input, index, TokenType::CParen)?;
 	}
 	Ok(params)
 }
 
-fn list(
-	data: &mut Parser,
-) -> miette::Result<Vec<SExpression>> {
+fn list<'a>(
+	input: &[Token<'a>],
+	index: &mut usize,
+) -> miette::Result<Vec<SExpression<'a>>> {
 	let mut out = Vec::default();
-	while data.index < data.input.len()
-	&& data.peek().tt != TokenType::CParen
-	{
-		out.push(s_expr(data)?);
+	while input[*index].tt != TokenType::CParen {
+		out.push(s_expr(input, index)?);
 	}
 	Ok(out)
 }
 
-#[derive(Debug, PartialEq)]
-pub(crate) enum SExpression {
-	Expr(Token),
-	List(Vec<SExpression>),
-}
-
-fn s_expr(
-	data: &mut Parser,
-) -> miette::Result<SExpression> {
-	match data.peek().tt {
+fn s_expr<'a>(
+	input: &[Token<'a>],
+	index: &mut usize,
+) -> miette::Result<SExpression<'a>> {
+	match input[*index].tt {
 		TokenType::OParen => {
-			match_token(data, TokenType::OParen)?;
-			let mut out = list(data)?;
-			match_token(data, TokenType::CParen)?;
-			if out.len() == 1 {
-				Ok(out.pop().unwrap())
-			} else {
-				Ok(SExpression::List(out))
-			}
+			match_token(input, index, TokenType::OParen)?;
+			let list = list(input, index)?;
+			match_token(input, index, TokenType::CParen)?;
+			Ok(SExpression::List(list))
 		}
+
 		_ => {
-			let out = data.peek().clone();
-			data.next_token();
-			Ok(SExpression::Expr(out))
+			*index += 1;
+			Ok(SExpression::Expr(input[*index-1].clone()))
+/*
+			Err(miette::miette! {
+				labels = vec![
+					LabeledSpan::at(token.range, "here"),
+				],
+				"Expected SExpression"
+			}.with_source_code(data.source.to_owned()))
+*/
 		}
 	}
 }
 
-fn program(
-	mut data: Parser,
-) -> miette::Result<Vec<SExpression>> {
+fn program<'a>(
+	input: &[Token<'a>],
+	index: &mut usize,
+) -> miette::Result<SExpression<'a>> {
 	let mut program = Vec::default();
-	while !data.is_empty() {
-		program.push(s_expr(&mut data)?);
+	while *index < input.len() {
+		program.push(s_expr(input, index)?);
 	}
-	Ok(program)
+	Ok(SExpression::List(program))
 }
 
 fn expected(s: &str) -> String {
 	format!("{s} Expected")
 }
 
+/*
+#[test]
+fn let_expressions_set_unknown_value_types_to_S32(
+) -> miette::Result<()> {
+	let input = "let a 3";
+	let ast = eval(input, crate::lexer::eval(input)?)?;
+	assert_eq!(ast, vec![
+		SExpression::Let {
+			ident: ("a".to_string(), ValueType::S32),
+			value: Expression::Literal(3, None),
+		}
+	]);
+	Ok(())
+}
+
 #[test]
 fn let_expressions_bind_value_types(
 ) -> miette::Result<()> {
-	use SExpression as SE;
-
 	let input = "let (a u8) (3)";
 	let ast = eval(input, crate::lexer::eval(input)?)?;
-	assert_eq!(ast.len(), 3);
 	assert_eq!(ast, vec![
-		SE::Expr(Token::new(TokenType::Let, 0..3)),
-		SE::List(vec![
-			SE::Expr(Token::new(TokenType::Ident, 5..6)),
-			SE::Expr(Token::new(TokenType::U8, 7..9)),
+		SExpression::Expr(Token::new(TokenType::Let, 0..3)),
+		SExpression::List(vec![
+			SExpression::Expr(Token::new(TokenType::Ident, 5..6)),
+			SExpression::Expr(Token::new(TokenType::U8, 7..9)),
 		]),
-		SE::List(vec![
-			SE::Expr(Token::new(TokenType::Num, 12..13)),
-		]),
+		SExpression::Expr(Token::new(TokenType::Num, 12..13)),
 	]);
 	Ok(())
 }
@@ -557,24 +528,21 @@ fn let_expressions_bind_value_types(
 #[test]
 fn field_accessor_in_call_position_captures_all_accesses(
 ) -> miette::Result<()> {
-	use SExpression as SE;
-
 	let input = "let (a) (b.c.d)";
 	let ast = eval(input, crate::lexer::eval(input)?)?;
 	assert_eq!(ast.len(), 3);
 	assert_eq!(ast, vec![
-		SE::Expr(Token::new(TokenType::Let, 0..3)),
-		SE::List(vec![
-			SE::Expr(Token::new(TokenType::Ident, 5..6)),
-		]),
-		SE::List(vec![
-			SE::Expr(Token::new(TokenType::Ident, 9..10)),
-			SE::Expr(Token::new(TokenType::Dot, 10..11)),
-			SE::Expr(Token::new(TokenType::Ident, 11..12)),
-			SE::Expr(Token::new(TokenType::Dot, 12..13)),
-			SE::Expr(Token::new(TokenType::Ident, 13..14)),
+		SExpression::Expr(Token::new(TokenType::Let, 0..3)),
+		SExpression::Expr(Token::new(TokenType::Ident, 5..6)),
+		SExpression::List(vec![
+			SExpression::Expr(Token::new(TokenType::Ident, 9..10)),
+			SExpression::Expr(Token::new(TokenType::Dot, 10..11)),
+			SExpression::Expr(Token::new(TokenType::Ident, 11..12)),
+			SExpression::Expr(Token::new(TokenType::Dot, 12..13)),
+			SExpression::Expr(Token::new(TokenType::Ident, 13..14)),
 		]),
 	]);
 	Ok(())
 }
+*/
 

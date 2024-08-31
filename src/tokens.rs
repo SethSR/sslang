@@ -34,23 +34,23 @@ pub(crate) enum TokenType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Token {
+pub(crate) struct Token<'a> {
 	pub(crate) tt: TokenType,
+	pub(crate) src: &'a str,
 	pub(crate) range: Range<usize>
 }
 
-impl Token {
+impl<'a> Token<'a> {
 	pub(crate) fn new(
 		tt: TokenType,
+		src: &'a str,
 		range: Range<usize>,
 	) -> Self {
-		Self { tt, range }
+		Self { tt, src, range }
 	}
 
-	pub(crate) fn get_token<'a>(&self,
-		source: &'a str,
-	) -> &'a str {
-		&source[self.range.clone()]
+	pub(crate) fn get_token(&self) -> &str {
+		&self.src[self.range.clone()]
 	}
 }
 

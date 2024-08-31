@@ -19,7 +19,7 @@ impl<'a> Lexer<'a> {
 }
 
 impl<'a> Iterator for Lexer<'a> {
-	type Item = Result<Token, miette::Error>;
+	type Item = Result<Token<'a>, miette::Error>;
 
 	fn next(&mut self) -> Option<Self::Item> {
 		loop {
@@ -30,6 +30,7 @@ impl<'a> Iterator for Lexer<'a> {
 			self.rest = chars.as_str();
 
 			let output = |tt| Some(Ok(Token::new(tt,
+				self.source,
 				c_at..self.index)));
 
 			match c {
@@ -47,6 +48,7 @@ impl<'a> Iterator for Lexer<'a> {
 				'/' => break output(TokenType::Slash),
 				'*' => break output(TokenType::Star),
 				'^' => break output(TokenType::Carrot),
+				'=' => break output(TokenType::Eq),
 
 				'a'..='z' | 'A'..='Z' | '_' => {
 					let mut inner_chars = self.rest.char_indices();
@@ -88,7 +90,7 @@ impl<'a> Iterator for Lexer<'a> {
 							TokenType::Ident
 						}
 					};
-					break Some(Ok(Token::new(tt, c_at..self.index)));
+					break Some(Ok(Token::new(tt, self.source, c_at..self.index)));
 				}
 
 				'0'..='9' => {
@@ -114,6 +116,7 @@ impl<'a> Iterator for Lexer<'a> {
 					}
 					break Some(Ok(Token::new(
 						TokenType::Num,
+						self.source,
 						c_at..self.index,
 					)));
 				}
@@ -161,31 +164,34 @@ fn tokenizes_empty_input() -> miette::Result<()> {
 
 #[test]
 fn tokenizes_let() -> miette::Result<()> {
-	let tokens = eval("let")?;
-	assert_eq!(tokens, vec![Token::new(TokenType::Let, 0..3)]);
+	let input = "let";
+	let tokens = eval(input)?;
+	assert_eq!(tokens, vec![Token::new(TokenType::Let, input, 0..3)]);
 	Ok(())
 }
 
 #[test]
 fn tokenizes_fn() -> miette::Result<()> {
-	let tokens = eval("fn")?;
-	assert_eq!(tokens, vec![Token::new(TokenType::Fn, 0..2)]);
+	let input = "fn";
+	let tokens = eval(input)?;
+	assert_eq!(tokens, vec![Token::new(TokenType::Fn, input, 0..2)]);
 	Ok(())
 }
 
 #[test]
 fn tokenizes_input_without_wrapping_parentheses(
 ) -> miette::Result<()> {
-	let tokens = eval("let (a u8) (3)")?;
+	let input = "let (a u8) (3)";
+	let tokens = eval(input)?;
 	assert_eq!(tokens, vec![
-		Token::new(TokenType::Let, 0..3),
-		Token::new(TokenType::OParen, 4..5),
-		Token::new(TokenType::Ident, 5..6),
-		Token::new(TokenType::U8, 7..9),
-		Token::new(TokenType::CParen, 9..10),
-		Token::new(TokenType::OParen, 11..12),
-		Token::new(TokenType::Num, 12..13),
-		Token::new(TokenType::CParen, 13..14),
+		Token::new(TokenType::Let, input, 0..3),
+		Token::new(TokenType::OParen, input, 4..5),
+		Token::new(TokenType::Ident, input, 5..6),
+		Token::new(TokenType::U8, input, 7..9),
+		Token::new(TokenType::CParen, input, 9..10),
+		Token::new(TokenType::OParen, input, 11..12),
+		Token::new(TokenType::Num, input, 12..13),
+		Token::new(TokenType::CParen, input, 13..14),
 	]);
 	Ok(())
 }

@@ -51,8 +51,17 @@ fn main () (
 
 		let tokens = lexer::eval(&buffer)?;
 
-		let ast = parser::eval(&buffer, tokens)?;
-		println!("{ast:#?}");
+		let ast = match parser::eval(tokens) {
+			Ok(out) => out,
+			Err(e) => {
+				eprintln!("{e}");
+				continue;
+			}
+		};
+		println!("({})", ast.iter()
+			.map(|i| format!("{i}"))
+			.collect::<Vec<String>>()
+			.join(" "));
 	}
 
 	Ok(())

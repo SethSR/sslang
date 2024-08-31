@@ -50,49 +50,54 @@ impl<'a> Iterator for Lexer<'a> {
 
 				'a'..='z' | 'A'..='Z' | '_' => {
 					let mut inner_chars = self.rest.char_indices();
-					break loop {
+					let mut index = 0;
+					loop {
 						if let Some((j,x)) = inner_chars.next() {
+							index = j;
 							if ('a'..='z').contains(&x)
 							|| ('A'..='Z').contains(&x)
 							|| ('0'..='9').contains(&x)
 							|| x == '_' {
 								continue;
 							}
-							self.index += j;
-							let ident = &self.source[c_at..self.index];
-							let tt = match ident {
-								"fn"  => TokenType::Fn,
-								"let" => TokenType::Let,
-								"rec" => TokenType::Rec,
-								"u8"  => TokenType::U8,
-								"u16" => TokenType::U16,
-								"u32" => TokenType::U32,
-								"s8"  => TokenType::S8,
-								"s16" => TokenType::S16,
-								"s32" => TokenType::S32,
-								_ => if ident.starts_with("fw") {
-									TokenType::F16
-								} else if ident.starts_with("fl") {
-									TokenType::F32
-								} else {
-									TokenType::Ident
-								}
-							};
-							self.rest = &self.rest[j..];
-							break Some(Ok(Token::new(tt, c_at..self.index)));
 						} else {
-							break Some(Err(miette::miette!(
-								"Unexpected EOF",
-							)));
+							index += 1;
 						}
+						self.index += index;
+						self.rest = &self.rest[index..];
+						break;
 					}
+
+					let ident = &self.source[c_at..self.index];
+					eprintln!("ident:{ident}");
+					let tt = match ident {
+						"fn"  => TokenType::Fn,
+						"let" => TokenType::Let,
+						"rec" => TokenType::Rec,
+						"u8"  => TokenType::U8,
+						"u16" => TokenType::U16,
+						"u32" => TokenType::U32,
+						"s8"  => TokenType::S8,
+						"s16" => TokenType::S16,
+						"s32" => TokenType::S32,
+						_ => if ident.starts_with("fw") {
+							TokenType::F16
+						} else if ident.starts_with("fl") {
+							TokenType::F32
+						} else {
+							TokenType::Ident
+						}
+					};
+					break Some(Ok(Token::new(tt, c_at..self.index)));
 				}
 
 				'0'..='9' => {
 					let mut have_dot = false;
 					let mut inner_chars = self.rest.char_indices();
-					break loop {
+					let mut index = 0;
+					loop {
 						if let Some((j,x)) = inner_chars.next() {
+							index = j;
 							if ('0'..='9').contains(&x) {
 								continue;
 							}
@@ -100,18 +105,17 @@ impl<'a> Iterator for Lexer<'a> {
 								have_dot = true;
 								continue;
 							}
-							self.index += j;
-							self.rest = &self.rest[j..];
-							break Some(Ok(Token::new(
-								TokenType::Num,
-								c_at..self.index,
-							)));
 						} else {
-							break Some(Err(miette::miette!(
-								"Unexpected EOF",
-							)));
+							index += 1;
 						}
+						self.index += index;
+						self.rest = &self.rest[index..];
+						break;
 					}
+					break Some(Ok(Token::new(
+						TokenType::Num,
+						c_at..self.index,
+					)));
 				}
 
 				w if w.is_whitespace() => {
@@ -148,3 +152,40 @@ pub(crate) fn eval(
 	Lexer::new(input).collect()
 }
 
+#[test]
+fn tokenizes_empty_input() -> miette::Result<()> {
+	let tokens = eval("")?;
+	assert_eq!(tokens, vec![]);
+	Ok(())
+}
+
+#[test]
+fn tokenizes_let() -> miette::Result<()> {
+	let tokens = eval("let")?;
+	assert_eq!(tokens, vec![Token::new(TokenType::Let, 0..3)]);
+	Ok(())
+}
+
+#[test]
+fn tokenizes_fn() -> miette::Result<()> {
+	let tokens = eval("fn")?;
+	assert_eq!(tokens, vec![Token::new(TokenType::Fn, 0..2)]);
+	Ok(())
+}
+
+#[test]
+fn tokenizes_input_without_wrapping_parentheses(
+) -> miette::Result<()> {
+	let tokens = eval("let (a u8) (3)")?;
+	assert_eq!(tokens, vec![
+		Token::new(TokenType::Let, 0..3),
+		Token::new(TokenType::OParen, 4..5),
+		Token::new(TokenType::Ident, 5..6),
+		Token::new(TokenType::U8, 7..9),
+		Token::new(TokenType::CParen, 9..10),
+		Token::new(TokenType::OParen, 11..12),
+		Token::new(TokenType::Num, 12..13),
+		Token::new(TokenType::CParen, 13..14),
+	]);
+	Ok(())
+}

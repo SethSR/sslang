@@ -9,8 +9,8 @@ pub(crate) type TypedIdent = (String, ValueType);
 pub(crate) enum ValueType {
 	U8, U16, U32,
 	S8, S16, S32,
-	F16(u8), // 16-bit fixed point with <u8> decimal bits
-	F32(u8), // 32-bit fixed point with <u8> decimal bits
+	F16(u8), // 16-bit fixed point with <u8> integer bits
+	F32(u8), // 32-bit fixed point with <u8> integer bits
 	TypeName(String),
 }
 
@@ -86,10 +86,10 @@ impl<'a,'b> Parser<'a,'b> {
 	}
 }
 
-//type Result<T> = std::result::Result<T, (bool, String)>;
-type Result<T> = miette::Result<T>;
 
-pub fn eval(input: &[Token]) -> Result<Vec<SExpression>> {
+pub fn eval(
+	input: &[Token],
+) -> miette::Result<Vec<SExpression>> {
 	if input.len() == 0 {
 		miette::bail!("Empty input");
 	}
@@ -97,7 +97,7 @@ pub fn eval(input: &[Token]) -> Result<Vec<SExpression>> {
 	program(Parser::new(input))
 }
 
-fn num(data: &'_ mut Parser) -> Result<u64> {
+fn num(data: &'_ mut Parser) -> miette::Result<u64> {
 	let token = data.peek();
 	if token.get_type() != TokenType::Num {
 		miette::bail!("{}", expected("Number"));
@@ -122,7 +122,7 @@ fn convert_float_to_fixed() {
 	assert_eq!(0x00000006_66666666, float_to_fixed(6.4));
 }
 
-fn ident(data: &'_ mut Parser) -> Result<String> {
+fn ident(data: &'_ mut Parser) -> miette::Result<String> {
 	let token = data.peek();
 	if token.get_type() != TokenType::Ident {
 		miette::bail!("{}", expected("Identifier"));
@@ -132,16 +132,15 @@ fn ident(data: &'_ mut Parser) -> Result<String> {
 	Ok(out)
 }
 
-fn value_type(data: &mut Parser) -> Result<ValueType> {
+fn value_type(
+	data: &mut Parser,
+) -> miette::Result<ValueType> {
 	let token = data.peek();
 	if !matches!(token.get_type(),
 		TokenType::U8 | TokenType::U16 | TokenType::U32 |
 		TokenType::S8 | TokenType::S16 | TokenType::S32 |
 		TokenType::F16 | TokenType::F32)
 	{
-		//TODO - srenshaw - Technically, an Identifier _can_
-		// be a value type, if it refers to a user defined
-		// type. So we'll need to add that at some point.
 		miette::bail!("{}", expected("Value Type"));
 	}
 
@@ -198,7 +197,7 @@ fn value_type(data: &mut Parser) -> Result<ValueType> {
 
 fn ident_typed_opt(
 	data: &mut Parser,
-) -> Result<(String,Option<ValueType>)> {
+) -> miette::Result<(String,Option<ValueType>)> {
 	let id = ident(data)?;
 	let val_type = value_type(data).ok();
 	Ok((id, val_type))
@@ -207,7 +206,7 @@ fn ident_typed_opt(
 fn match_token(
 	data: &mut Parser,
 	tt: TokenType,
-) -> Result<()> {
+) -> miette::Result<()> {
 	if data.peek().get_type() == tt {
 		Ok(data.next_token())
 	} else {
@@ -216,7 +215,9 @@ fn match_token(
 	}
 }
 
-fn minor_expr(data: &mut Parser) -> Result<Expression> {
+fn minor_expr(
+	data: &mut Parser,
+) -> miette::Result<Expression> {
 	let token = data.peek().clone();
 	match token.get_type() {
 		TokenType::Let |
@@ -279,7 +280,7 @@ fn minor_expr(data: &mut Parser) -> Result<Expression> {
 fn gather_params(
 	data: &mut Parser,
 	count: usize,
-) -> Result<Vec<Expression>> {
+) -> miette::Result<Vec<Expression>> {
 	let mut out = Vec::default();
 	for _ in 0..count {
 		out.push(minor_expr(data)?);
@@ -290,7 +291,7 @@ fn gather_params(
 	Ok(out)
 }
 
-fn expr(data: &mut Parser) -> Result<Expression> {
+fn expr(data: &mut Parser) -> miette::Result<Expression> {
 	let token = data.peek().clone();
 	match token.get_type() {
 		TokenType::Let |
@@ -430,7 +431,9 @@ fn expr(data: &mut Parser) -> Result<Expression> {
 	}
 }
 
-fn ident_typed(data: &mut Parser) -> Result<TypedIdent> {
+fn ident_typed(
+	data: &mut Parser,
+) -> miette::Result<TypedIdent> {
 	let id = ident(data)?;
 	let val_type = value_type(data)?;
 	Ok((id, val_type))
@@ -438,7 +441,7 @@ fn ident_typed(data: &mut Parser) -> Result<TypedIdent> {
 
 fn param_list(
 	data: &mut Parser,
-) -> Result<Vec<TypedIdent>> {
+) -> miette::Result<Vec<TypedIdent>> {
 	let mut params = Vec::default();
 	while data.peek().get_type() != TokenType::RParen {
 		match_token(data, TokenType::LParen)?;
@@ -450,7 +453,7 @@ fn param_list(
 
 fn body(
 	data: &mut Parser,
-) -> Result<(Vec<SExpression>, Option<Expression>)> {
+) -> miette::Result<(Vec<SExpression>, Option<Expression>)> {
 	let mut out1 = Vec::default();
 	while data.peek().get_type() == TokenType::LParen {
 		match_token(data, TokenType::LParen)?;
@@ -465,7 +468,9 @@ fn body(
 	Ok((out1, out2))
 }
 
-fn s_expr(data: &mut Parser) -> Result<SExpression> {
+fn s_expr(
+	data: &mut Parser,
+) -> miette::Result<SExpression> {
 	match data.peek().get_type() {
 		TokenType::Let => {
 			match_token(data, TokenType::Let)?;
@@ -500,7 +505,9 @@ fn s_expr(data: &mut Parser) -> Result<SExpression> {
 	}
 }
 
-fn program(mut data: Parser) -> Result<Vec<SExpression>> {
+fn program(
+	mut data: Parser,
+) -> miette::Result<Vec<SExpression>> {
 	let mut program = Vec::default();
 	while !data.is_empty() {
 		program.push(s_expr(&mut data)?);

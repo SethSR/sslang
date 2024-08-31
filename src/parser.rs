@@ -240,18 +240,18 @@ fn minor_expr(
 		t @ TokenType::Percent |
 		t @ TokenType::LArrow |
 		t @ TokenType::RArrow |
-		t @ TokenType::UArrow |
+		t @ TokenType::Carrot |
 		t @ TokenType::Bang |
 		t @ TokenType::Ampersand |
 		t @ TokenType::Pipe |
 		t @ TokenType::Dot |
-		t @ TokenType::RParen |
+		t @ TokenType::CParen |
 		t @ TokenType::Eq => miette::bail!("Unexpected {t:?}"),
 
-		TokenType::LParen => {
-			match_token(data, TokenType::LParen)?;
+		TokenType::OParen => {
+			match_token(data, TokenType::OParen)?;
 			let out = expr(data)?;
-			match_token(data, TokenType::RParen)?;
+			match_token(data, TokenType::CParen)?;
 			Ok(out)
 		}
 
@@ -285,7 +285,7 @@ fn gather_params(
 	for _ in 0..count {
 		out.push(minor_expr(data)?);
 	}
-	while data.peek().get_type() != TokenType::RParen {
+	while data.peek().get_type() != TokenType::CParen {
 		out.push(minor_expr(data)?);
 	}
 	Ok(out)
@@ -308,7 +308,7 @@ fn expr(data: &mut Parser) -> miette::Result<Expression> {
 			expected("Expression")),
 
 		TokenType::Dot => miette::bail!("Unexpected '.'"),
-		TokenType::RParen => miette::bail!("Unexpected ')'"),
+		TokenType::CParen => miette::bail!("Unexpected ')'"),
 
 		TokenType::Plus => {
 			match_token(data, TokenType::Plus)?;
@@ -340,10 +340,10 @@ fn expr(data: &mut Parser) -> miette::Result<Expression> {
 			Ok(Expression::FnCall("Mod".to_string(),
 				gather_params(data, 2)?))
 		}
-		TokenType::LParen => {
-			match_token(data, TokenType::LParen)?;
+		TokenType::OParen => {
+			match_token(data, TokenType::OParen)?;
 			let out = expr(data)?;
-			match_token(data, TokenType::RParen)?;
+			match_token(data, TokenType::CParen)?;
 			Ok(out)
 		}
 		TokenType::LArrow => {
@@ -395,9 +395,9 @@ fn expr(data: &mut Parser) -> miette::Result<Expression> {
 					gather_params(data, 2)?))
 			}
 		}
-		TokenType::UArrow => {
-			match_token(data, TokenType::UArrow)?;
-			if match_token(data, TokenType::UArrow).is_ok() {
+		TokenType::Carrot => {
+			match_token(data, TokenType::Carrot)?;
+			if match_token(data, TokenType::Carrot).is_ok() {
 				Ok(Expression::FnCall("XorL".to_string(),
 					gather_params(data, 2)?))
 			} else {
@@ -443,10 +443,10 @@ fn param_list(
 	data: &mut Parser,
 ) -> miette::Result<Vec<TypedIdent>> {
 	let mut params = Vec::default();
-	while data.peek().get_type() != TokenType::RParen {
-		match_token(data, TokenType::LParen)?;
+	while data.peek().get_type() != TokenType::CParen {
+		match_token(data, TokenType::OParen)?;
 		params.push(ident_typed(data)?);
-		match_token(data, TokenType::RParen)?;
+		match_token(data, TokenType::CParen)?;
 	}
 	Ok(params)
 }
@@ -455,12 +455,12 @@ fn body(
 	data: &mut Parser,
 ) -> miette::Result<(Vec<SExpression>, Option<Expression>)> {
 	let mut out1 = Vec::default();
-	while data.peek().get_type() == TokenType::LParen {
-		match_token(data, TokenType::LParen)?;
+	while data.peek().get_type() == TokenType::OParen {
+		match_token(data, TokenType::OParen)?;
 		out1.push(s_expr(data)?);
-		match_token(data, TokenType::RParen)?;
+		match_token(data, TokenType::CParen)?;
 	}
-	let out2 = if data.peek().get_type() == TokenType::RParen {
+	let out2 = if data.peek().get_type() == TokenType::CParen {
 		None
 	} else {
 		Some(expr(data)?)
@@ -474,31 +474,31 @@ fn s_expr(
 	match data.peek().get_type() {
 		TokenType::Let => {
 			match_token(data, TokenType::Let)?;
-			match_token(data, TokenType::LParen)?;
+			match_token(data, TokenType::OParen)?;
 			let ident = ident_typed_opt(data)?;
-			match_token(data, TokenType::RParen)?;
-			match_token(data, TokenType::LParen)?;
+			match_token(data, TokenType::CParen)?;
+			match_token(data, TokenType::OParen)?;
 			let expr = expr(data)?;
-			match_token(data, TokenType::RParen)?;
+			match_token(data, TokenType::CParen)?;
 			Ok(SExpression::Value { ident, expr })
 		}
 		TokenType::Fn => {
 			match_token(data, TokenType::Fn)?;
 			let ident = ident(data)?;
-			match_token(data, TokenType::LParen)?;
+			match_token(data, TokenType::OParen)?;
 			let params = param_list(data)?;
-			match_token(data, TokenType::RParen)?;
-			match_token(data, TokenType::LParen)?;
+			match_token(data, TokenType::CParen)?;
+			match_token(data, TokenType::OParen)?;
 			let body = body(data)?;
-			match_token(data, TokenType::RParen)?;
+			match_token(data, TokenType::CParen)?;
 			Ok(SExpression::Function { ident, params, body })
 		}
 		TokenType::Rec => {
 			match_token(data, TokenType::Rec)?;
 			let ident = ident(data)?;
-			match_token(data, TokenType::LParen)?;
+			match_token(data, TokenType::OParen)?;
 			let fields = param_list(data)?;
-			match_token(data, TokenType::RParen)?;
+			match_token(data, TokenType::CParen)?;
 			Ok(SExpression::Record { ident, fields })
 		}
 		_ => miette::bail!("{}", expected("S-Expression")),

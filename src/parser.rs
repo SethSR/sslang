@@ -1,7 +1,7 @@
 
 use miette::{IntoDiagnostic, LabeledSpan, WrapErr};
 
-use crate::lexer::{Token, TokenType};
+use crate::tokens::{Token, TokenType};
 
 pub(crate) type TypedIdent = (String, ValueType);
 
@@ -39,22 +39,16 @@ pub(crate) enum Expression {
 	Literal(u64,Option<ValueType>),
 	/// function-call := ident expr*
 	FnCall(String, Vec<Expression>),
-	/// field-access := ident ('.' ident)+
-	FieldAccess(String, Vec<String>),
-}
-
-#[derive(Debug, PartialEq)]
-pub(crate) enum SExpression {
-	Function {
+	DefFn {
 		ident : String,
 		params: Vec<TypedIdent>,
-		body  : (Vec<SExpression>, Option<Expression>),
+		body  : Vec<SExpression>,
 	},
-	Value {
+	DefVal {
 		ident: (String, Option<ValueType>),
-		expr : Expression,
+		value: Box<Expression>,
 	},
-	Record {
+	DefRec {
 		ident : String,
 		fields: Vec<TypedIdent>,
 	},
@@ -105,7 +99,7 @@ pub fn eval(
 
 fn num(data: &'_ mut Parser) -> miette::Result<u64> {
 	let token = data.peek();
-	if token.get_type() != TokenType::Num {
+	if token.tt != TokenType::Num {
 		miette::bail!("{}", expected("Number"));
 	}
 	let out = token.get_token(data.source)
@@ -130,7 +124,7 @@ fn convert_float_to_fixed() {
 
 fn ident(data: &'_ mut Parser) -> miette::Result<String> {
 	let token = data.peek();
-	if token.get_type() != TokenType::Ident {
+	if token.tt != TokenType::Ident {
 		miette::bail!("{}", expected("Identifier"));
 	}
 	let out = token.get_token(data.source).to_owned();
@@ -142,7 +136,7 @@ fn value_type(
 	data: &mut Parser,
 ) -> miette::Result<ValueType> {
 	let token = data.peek();
-	let out = match token.get_type() {
+	let out = match token.tt {
 		TokenType::U8 => ValueType::U8,
 		TokenType::U16 => ValueType::U16,
 		TokenType::U32 => ValueType::U32,
@@ -203,7 +197,18 @@ fn match_token(
 	data: &mut Parser,
 	tt: TokenType,
 ) -> miette::Result<()> {
-	if data.peek().get_type() == tt {
+	if data.index >= data.input.len() {
+		let t = data.input[data.index-1]
+			.clone()
+			.range
+			.end;
+		Err(miette::miette! {
+			labels = vec![
+				LabeledSpan::at(t..data.source.len(), "here"),
+			],
+			"Expected {tt:?}",
+		}.with_source_code(data.source.to_owned()))
+	} else if data.peek().tt == tt {
 		Ok(data.next_token())
 	} else {
 		Err(miette::miette! {
@@ -219,10 +224,29 @@ fn minor_expr(
 	data: &mut Parser,
 ) -> miette::Result<Expression> {
 	let token = data.peek().clone();
-	match token.get_type() {
-		TokenType::Let |
-		TokenType::Fn |
-		TokenType::Rec |
+	match token.tt {
+		TokenType::Let => {
+			match_token(data, TokenType::Let)?;
+			let ident = ident_typed_opt(data)?;
+			let value = Box::new(expr(data)?);
+			Ok(Expression::DefVal { ident, value })
+		}
+
+		TokenType::Fn => {
+			match_token(data, TokenType::Fn)?;
+			let ident = ident(data)?;
+			let params = param_list(data)?;
+			let body = list(data)?;
+			Ok(Expression::DefFn { ident, params, body })
+		}
+
+		TokenType::Rec => {
+			match_token(data, TokenType::Rec)?;
+			let ident = ident(data)?;
+			let fields = param_list(data)?;
+			Ok(Expression::DefRec { ident, fields })
+		}
+
 		TokenType::U8 |
 		TokenType::U16 |
 		TokenType::U32 |
@@ -230,8 +254,12 @@ fn minor_expr(
 		TokenType::S16 |
 		TokenType::S32 |
 		TokenType::F16 |
-		TokenType::F32 => miette::bail!("{}",
-			expected("Expression")),
+		TokenType::F32 => Err(miette::miette! {
+			labels = vec![
+				LabeledSpan::at(token.range.clone(), "here"),
+			],
+			"Expected Expression",
+		}.with_source_code(data.source.to_owned())),
 
 		t @ TokenType::Plus |
 		t @ TokenType::Minus |
@@ -246,7 +274,12 @@ fn minor_expr(
 		t @ TokenType::Pipe |
 		t @ TokenType::Dot |
 		t @ TokenType::CParen |
-		t @ TokenType::Eq => miette::bail!("Unexpected {t:?}"),
+		t @ TokenType::Eq => Err(miette::miette! {
+			labels = vec![
+				LabeledSpan::at(token.range.clone(), "here"),
+			],
+			"Unexpected {t:?}",
+		}.with_source_code(data.source.to_owned())),
 
 		TokenType::OParen => {
 			match_token(data, TokenType::OParen)?;
@@ -256,17 +289,13 @@ fn minor_expr(
 		}
 
 		TokenType::Ident => {
-			let s = token.get_token(data.source).to_owned();
+			let mut s = token.get_token(data.source).to_owned();
 			data.next_token();
-			let mut fields = Vec::default();
 			while match_token(data, TokenType::Dot).is_ok() {
-				fields.push(ident(data)?);
+				s.push('.');
+				s.push_str(&ident(data)?);
 			}
-			if !fields.is_empty() {
-				Ok(Expression::FieldAccess(s, fields))
-			} else {
-				Ok(Expression::FnCall(s, vec![]))
-			}
+			Ok(Expression::FnCall(s, vec![]))
 		}
 
 		TokenType::Num => {
@@ -285,7 +314,7 @@ fn gather_params(
 	for _ in 0..count {
 		out.push(minor_expr(data)?);
 	}
-	while data.peek().get_type() != TokenType::CParen {
+	while data.peek().tt != TokenType::CParen {
 		out.push(minor_expr(data)?);
 	}
 	Ok(out)
@@ -293,7 +322,7 @@ fn gather_params(
 
 fn expr(data: &mut Parser) -> miette::Result<Expression> {
 	let token = data.peek().clone();
-	match token.get_type() {
+	match token.tt {
 		TokenType::Let |
 		TokenType::Fn |
 		TokenType::Rec |
@@ -304,11 +333,15 @@ fn expr(data: &mut Parser) -> miette::Result<Expression> {
 		TokenType::S16 |
 		TokenType::S32 |
 		TokenType::F16 |
-		TokenType::F32 => miette::bail!("{}",
-			expected("Expression")),
-
-		TokenType::Dot => miette::bail!("Unexpected '.'"),
-		TokenType::CParen => miette::bail!("Unexpected ')'"),
+		TokenType::F32 |
+		TokenType::Dot |
+		TokenType::OParen |
+		TokenType::CParen => Err(miette::miette! {
+			labels = vec![
+				LabeledSpan::at(token.range.clone(), "here"),
+			],
+			"Unexpected '{:?}'", token.tt,
+		}.with_source_code(data.source.to_owned())),
 
 		TokenType::Plus => {
 			match_token(data, TokenType::Plus)?;
@@ -340,12 +373,7 @@ fn expr(data: &mut Parser) -> miette::Result<Expression> {
 			Ok(Expression::FnCall("Mod".to_string(),
 				gather_params(data, 2)?))
 		}
-		TokenType::OParen => {
-			match_token(data, TokenType::OParen)?;
-			let out = expr(data)?;
-			match_token(data, TokenType::CParen)?;
-			Ok(out)
-		}
+
 		TokenType::LArrow => {
 			match_token(data, TokenType::LArrow)?;
 			if match_token(data, TokenType::LArrow).is_ok() {
@@ -443,7 +471,7 @@ fn param_list(
 	data: &mut Parser,
 ) -> miette::Result<Vec<TypedIdent>> {
 	let mut params = Vec::default();
-	while data.peek().get_type() != TokenType::CParen {
+	while data.peek().tt != TokenType::CParen {
 		match_token(data, TokenType::OParen)?;
 		params.push(ident_typed(data)?);
 		match_token(data, TokenType::CParen)?;
@@ -451,57 +479,43 @@ fn param_list(
 	Ok(params)
 }
 
-fn body(
+fn list(
 	data: &mut Parser,
-) -> miette::Result<(Vec<SExpression>, Option<Expression>)> {
-	let mut out1 = Vec::default();
-	while data.peek().get_type() == TokenType::OParen {
-		match_token(data, TokenType::OParen)?;
-		out1.push(s_expr(data)?);
-		match_token(data, TokenType::CParen)?;
+) -> miette::Result<Vec<SExpression>> {
+	let mut out = Vec::default();
+	while data.index < data.input.len()
+	&& data.peek().tt != TokenType::CParen
+	{
+		out.push(s_expr(data)?);
 	}
-	let out2 = if data.peek().get_type() == TokenType::CParen {
-		None
-	} else {
-		Some(expr(data)?)
-	};
-	Ok((out1, out2))
+	Ok(out)
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum SExpression {
+	Expr(Token),
+	List(Vec<SExpression>),
 }
 
 fn s_expr(
 	data: &mut Parser,
 ) -> miette::Result<SExpression> {
-	match data.peek().get_type() {
-		TokenType::Let => {
-			match_token(data, TokenType::Let)?;
+	match data.peek().tt {
+		TokenType::OParen => {
 			match_token(data, TokenType::OParen)?;
-			let ident = ident_typed_opt(data)?;
+			let mut out = list(data)?;
 			match_token(data, TokenType::CParen)?;
-			match_token(data, TokenType::OParen)?;
-			let expr = expr(data)?;
-			match_token(data, TokenType::CParen)?;
-			Ok(SExpression::Value { ident, expr })
+			if out.len() == 1 {
+				Ok(out.pop().unwrap())
+			} else {
+				Ok(SExpression::List(out))
+			}
 		}
-		TokenType::Fn => {
-			match_token(data, TokenType::Fn)?;
-			let ident = ident(data)?;
-			match_token(data, TokenType::OParen)?;
-			let params = param_list(data)?;
-			match_token(data, TokenType::CParen)?;
-			match_token(data, TokenType::OParen)?;
-			let body = body(data)?;
-			match_token(data, TokenType::CParen)?;
-			Ok(SExpression::Function { ident, params, body })
+		_ => {
+			let out = data.peek().clone();
+			data.next_token();
+			Ok(SExpression::Expr(out))
 		}
-		TokenType::Rec => {
-			match_token(data, TokenType::Rec)?;
-			let ident = ident(data)?;
-			match_token(data, TokenType::OParen)?;
-			let fields = param_list(data)?;
-			match_token(data, TokenType::CParen)?;
-			Ok(SExpression::Record { ident, fields })
-		}
-		_ => miette::bail!("{}", expected("S-Expression")),
 	}
 }
 
@@ -522,26 +536,45 @@ fn expected(s: &str) -> String {
 #[test]
 fn let_expressions_bind_value_types(
 ) -> miette::Result<()> {
+	use SExpression as SE;
+
 	let input = "let (a u8) (3)";
 	let ast = eval(input, crate::lexer::eval(input)?)?;
-	assert_eq!(ast.len(), 1);
-	assert_eq!(ast[0], SExpression::Value {
-		ident: ("a".to_string(), Some(ValueType::U8)),
-		expr: Expression::Literal(3, None),
-	});
+	assert_eq!(ast.len(), 3);
+	assert_eq!(ast, vec![
+		SE::Expr(Token::new(TokenType::Let, 0..3)),
+		SE::List(vec![
+			SE::Expr(Token::new(TokenType::Ident, 5..6)),
+			SE::Expr(Token::new(TokenType::U8, 7..9)),
+		]),
+		SE::List(vec![
+			SE::Expr(Token::new(TokenType::Num, 12..13)),
+		]),
+	]);
 	Ok(())
 }
 
 #[test]
 fn field_accessor_in_call_position_captures_all_accesses(
 ) -> miette::Result<()> {
+	use SExpression as SE;
+
 	let input = "let (a) (b.c.d)";
 	let ast = eval(input, crate::lexer::eval(input)?)?;
-	assert_eq!(ast.len(), 1);
-	assert_eq!(ast[0], SExpression::Value {
-		ident: ("a".to_string(), None),
-		expr: Expression::FnCall("b.c.d".to_string(), vec![]),
-	});
+	assert_eq!(ast.len(), 3);
+	assert_eq!(ast, vec![
+		SE::Expr(Token::new(TokenType::Let, 0..3)),
+		SE::List(vec![
+			SE::Expr(Token::new(TokenType::Ident, 5..6)),
+		]),
+		SE::List(vec![
+			SE::Expr(Token::new(TokenType::Ident, 9..10)),
+			SE::Expr(Token::new(TokenType::Dot, 10..11)),
+			SE::Expr(Token::new(TokenType::Ident, 11..12)),
+			SE::Expr(Token::new(TokenType::Dot, 12..13)),
+			SE::Expr(Token::new(TokenType::Ident, 13..14)),
+		]),
+	]);
 	Ok(())
 }
 

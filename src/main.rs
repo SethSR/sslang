@@ -1,4 +1,5 @@
 
+mod tokens;
 mod lexer;
 mod parser;
 
@@ -17,6 +18,7 @@ fn main() -> miette::Result<()> {
 			break;
 		}
 
+/*
 		let test = "
 let (x u8) (+ 1 2)
 fn do_stuff (
@@ -45,10 +47,11 @@ fn main () (
 	))
 	vmul p q
 )";
+*/
 
-		let tokens = lexer::eval(test)?;
+		let tokens = lexer::eval(&buffer)?;
 
-		let ast = parser::eval(test, tokens)?;
+		let ast = parser::eval(&buffer, tokens)?;
 		println!("{ast:#?}");
 	}
 

@@ -48,7 +48,7 @@ fn main () (
 
 		let tokens = lexer::eval(test)?;
 
-		let ast = parser::eval(&tokens)?;
+		let ast = parser::eval(test, tokens)?;
 		println!("{ast:#?}");
 	}
 

@@ -1,5 +1,5 @@
 
-use miette::{IntoDiagnostic, WrapErr};
+use miette::{IntoDiagnostic, LabeledSpan, WrapErr};
 
 use crate::lexer::{Token, TokenType};
 
@@ -60,14 +60,19 @@ pub(crate) enum SExpression {
 	},
 }
 
-struct Parser<'a,'b> where 'b: 'a {
+struct Parser<'a> {
+	source: &'a str,
 	index: usize,
-	input: &'a [Token<'b>],
+	input: Vec<Token>,
 }
 
-impl<'a,'b> Parser<'a,'b> {
-	fn new(input: &'a [Token<'b>]) -> Self {
+impl<'a> Parser<'a> {
+	fn new(
+		source: &'a str,
+		input: Vec<Token>,
+	) -> Self {
 		Self {
+			source,
 			index: 0,
 			input,
 		}
@@ -88,13 +93,14 @@ impl<'a,'b> Parser<'a,'b> {
 
 
 pub fn eval(
-	input: &[Token],
+	source: &str,
+	input: Vec<Token>,
 ) -> miette::Result<Vec<SExpression>> {
 	if input.len() == 0 {
 		miette::bail!("Empty input");
 	}
 
-	program(Parser::new(input))
+	program(Parser::new(source, input))
 }
 
 fn num(data: &'_ mut Parser) -> miette::Result<u64> {
@@ -102,7 +108,7 @@ fn num(data: &'_ mut Parser) -> miette::Result<u64> {
 	if token.get_type() != TokenType::Num {
 		miette::bail!("{}", expected("Number"));
 	}
-	let out = token.get_token()
+	let out = token.get_token(data.source)
 		.parse::<f64>()
 		.into_diagnostic()
 		.wrap_err("lexer should not allow invalid floating-point values")?;
@@ -127,7 +133,7 @@ fn ident(data: &'_ mut Parser) -> miette::Result<String> {
 	if token.get_type() != TokenType::Ident {
 		miette::bail!("{}", expected("Identifier"));
 	}
-	let out = token.get_token().to_owned();
+	let out = token.get_token(data.source).to_owned();
 	data.next_token();
 	Ok(out)
 }
@@ -136,23 +142,15 @@ fn value_type(
 	data: &mut Parser,
 ) -> miette::Result<ValueType> {
 	let token = data.peek();
-	if !matches!(token.get_type(),
-		TokenType::U8 | TokenType::U16 | TokenType::U32 |
-		TokenType::S8 | TokenType::S16 | TokenType::S32 |
-		TokenType::F16 | TokenType::F32)
-	{
-		miette::bail!("{}", expected("Value Type"));
-	}
-
-	match token.get_type() {
-		TokenType::U8 => Ok(ValueType::U8),
-		TokenType::U16 => Ok(ValueType::U16),
-		TokenType::U32 => Ok(ValueType::U32),
-		TokenType::S8 => Ok(ValueType::S8),
-		TokenType::S16 => Ok(ValueType::S16),
-		TokenType::S32 => Ok(ValueType::S32),
+	let out = match token.get_type() {
+		TokenType::U8 => ValueType::U8,
+		TokenType::U16 => ValueType::U16,
+		TokenType::U32 => ValueType::U32,
+		TokenType::S8 => ValueType::S8,
+		TokenType::S16 => ValueType::S16,
+		TokenType::S32 => ValueType::S32,
 		TokenType::F16 => {
-			let Some(bit_spec) = token.get_token()
+			let Some(bit_spec) = token.get_token(data.source)
 				.strip_prefix("fw")
 			else {
 				miette::bail!("Parsed a Fixed-point Word that doesn't start with 'fw'");
@@ -160,39 +158,37 @@ fn value_type(
 
 			let Ok(bits) = bit_spec.parse::<u8>()
 			else {
-				miette::bail!("Unable to parse {} into Fixed-point Word type", token.get_token());
+				miette::bail!("Unable to parse {} into Fixed-point Word type", token.get_token(data.source));
 			};
 
 			if bits > 16 {
 				miette::bail!("{}",
 					expected("Bit specifier between 0..=16"));
 			}
-
-			data.next_token();
-			Ok(ValueType::F16(bits))
+			ValueType::F16(bits)
 		}
 		TokenType::F32 => {
-			let Some(bit_spec) = token.get_token()
+			let Some(bit_spec) = token.get_token(data.source)
 				.strip_prefix("fl")
 			else {
 				miette::bail!("Parsed a Fixed-point Long that doesn't start with 'fl'");
 			};
 
 			let Ok(bits) = bit_spec.parse::<u8>() else {
-				miette::bail!("Unable to parse {} into Fixed-point Long type", token.get_token());
+				miette::bail!("Unable to parse {} into Fixed-point Long type", token.get_token(data.source));
 			};
 
 			if bits > 32 {
 				miette::bail!("{}",
 					expected("Bit specifier between 0..=32"));
 			}
-
-			data.next_token();
-			Ok(ValueType::F32(bits))
+			ValueType::F32(bits)
 		}
-		TokenType::Ident => Ok(ValueType::TypeName(token.get_token().to_owned())),
+		TokenType::Ident => ValueType::TypeName(token.get_token(data.source).to_owned()),
 		_ => miette::bail!("Expected Value Type"),
-	}
+	};
+	data.next_token();
+	Ok(out)
 }
 
 fn ident_typed_opt(
@@ -210,8 +206,12 @@ fn match_token(
 	if data.peek().get_type() == tt {
 		Ok(data.next_token())
 	} else {
-		miette::bail!("{}",
-			expected(&format!("{tt:?} @ {}", data.index)))
+		Err(miette::miette! {
+			labels = vec![
+				LabeledSpan::at(data.peek().range.clone(), "here")
+			],
+			"Expected {tt:?}",
+		}.with_source_code(data.source.to_owned()))
 	}
 }
 
@@ -256,7 +256,7 @@ fn minor_expr(
 		}
 
 		TokenType::Ident => {
-			let s = token.get_token().to_owned();
+			let s = token.get_token(data.source).to_owned();
 			data.next_token();
 			let mut fields = Vec::default();
 			while match_token(data, TokenType::Dot).is_ok() {
@@ -523,7 +523,7 @@ fn expected(s: &str) -> String {
 fn let_expressions_bind_value_types(
 ) -> miette::Result<()> {
 	let input = "let (a u8) (3)";
-	let ast = eval(&crate::lexer::eval(input)?)?;
+	let ast = eval(input, crate::lexer::eval(input)?)?;
 	assert_eq!(ast.len(), 1);
 	assert_eq!(ast[0], SExpression::Value {
 		ident: ("a".to_string(), Some(ValueType::U8)),
@@ -536,8 +536,7 @@ fn let_expressions_bind_value_types(
 fn field_accessor_in_call_position_captures_all_accesses(
 ) -> miette::Result<()> {
 	let input = "let (a) (b.c.d)";
-	let lexemes = crate::lexer::eval(input)?;
-	let ast = eval(&lexemes)?;
+	let ast = eval(input, crate::lexer::eval(input)?)?;
 	assert_eq!(ast.len(), 1);
 	assert_eq!(ast[0], SExpression::Value {
 		ident: ("a".to_string(), None),

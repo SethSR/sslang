@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use miette::LabeledSpan;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,23 +34,25 @@ pub(crate) enum TokenType {
 	Num,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Token<'a> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Token {
 	tt: TokenType,
-	token: &'a str,
+	pub(crate) range: Range<usize>
 }
 
-impl Token<'_> {
-	fn new<'a>(tt: TokenType, token: &'a str) -> Token<'a> {
-		Token { tt, token }
+impl Token {
+	fn new(tt: TokenType, range: Range<usize>) -> Token {
+		Token { tt, range }
 	}
 
 	pub(crate) fn get_type(&self) -> TokenType {
 		self.tt
 	}
 
-	pub(crate) fn get_token(&self) -> &str {
-		self.token
+	pub(crate) fn get_token<'a>(&self,
+		source: &'a str,
+	) -> &'a str {
+		&source[self.range.clone()]
 	}
 }
 
@@ -69,7 +73,7 @@ impl<'a> Lexer<'a> {
 }
 
 impl<'a> Iterator for Lexer<'a> {
-	type Item = Result<Token<'a>, miette::Error>;
+	type Item = Result<Token, miette::Error>;
 
 	fn next(&mut self) -> Option<Self::Item> {
 		loop {
@@ -80,7 +84,7 @@ impl<'a> Iterator for Lexer<'a> {
 			self.rest = chars.as_str();
 
 			let output = |tt| Some(Ok(Token::new(tt,
-				&self.source[c_at..self.index])));
+				c_at..self.index)));
 
 			match c {
 				'&' => break output(TokenType::Ampersand),
@@ -108,7 +112,8 @@ impl<'a> Iterator for Lexer<'a> {
 							|| x == '_' {
 								continue;
 							}
-							let ident = &self.source[c_at..self.index+j];
+							self.index += j;
+							let ident = &self.source[c_at..self.index];
 							let tt = match ident {
 								"fn"  => TokenType::Fn,
 								"let" => TokenType::Let,
@@ -127,9 +132,8 @@ impl<'a> Iterator for Lexer<'a> {
 									TokenType::Ident
 								}
 							};
-							self.index += j;
 							self.rest = &self.rest[j..];
-							break Some(Ok(Token::new(tt, ident)));
+							break Some(Ok(Token::new(tt, c_at..self.index)));
 						} else {
 							break Some(Err(miette::miette!(
 								"Unexpected EOF",
@@ -150,12 +154,11 @@ impl<'a> Iterator for Lexer<'a> {
 								have_dot = true;
 								continue;
 							}
-							let num = &self.source[c_at..self.index+j];
 							self.index += j;
 							self.rest = &self.rest[j..];
 							break Some(Ok(Token::new(
 								TokenType::Num,
-								num,
+								c_at..self.index,
 							)));
 						} else {
 							break Some(Err(miette::miette!(

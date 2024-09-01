@@ -58,10 +58,7 @@ fn main () (
 				continue;
 			}
 		};
-		println!("({})", ast.iter()
-			.map(|i| format!("{i}"))
-			.collect::<Vec<String>>()
-			.join(" "));
+		println!("{ast}");
 	}
 
 	Ok(())

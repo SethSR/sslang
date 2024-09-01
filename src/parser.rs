@@ -118,10 +118,10 @@ fn value_type(
 ) -> miette::Result<ValueType> {
 	let token = input[*index].clone();
 	let out = match token.tt {
-		TokenType::U8 => ValueType::U8,
+		TokenType::U8  => ValueType::U8,
 		TokenType::U16 => ValueType::U16,
 		TokenType::U32 => ValueType::U32,
-		TokenType::S8 => ValueType::S8,
+		TokenType::S8  => ValueType::S8,
 		TokenType::S16 => ValueType::S16,
 		TokenType::S32 => ValueType::S32,
 		TokenType::F16 => {
@@ -180,6 +180,10 @@ fn match_token(
 	index: &mut usize,
 	tt: TokenType,
 ) -> miette::Result<()> {
+	if *index >= input.len() {
+		miette::bail!("Unexpected EOF");
+	}
+
 	let token = &input[*index];
 	if token.tt == tt {
 		*index += 1;
@@ -446,7 +450,7 @@ fn list<'a>(
 	index: &mut usize,
 ) -> miette::Result<Vec<SExpression<'a>>> {
 	let mut out = Vec::default();
-	while input[*index].tt != TokenType::CParen {
+	while *index < input.len() && input[*index].tt != TokenType::CParen {
 		out.push(s_expr(input, index)?);
 	}
 	Ok(out)
@@ -456,12 +460,20 @@ fn s_expr<'a>(
 	input: &[Token<'a>],
 	index: &mut usize,
 ) -> miette::Result<SExpression<'a>> {
+	if *index >= input.len() {
+		miette::bail!("Unexpected EOF");
+	}
+
 	match input[*index].tt {
 		TokenType::OParen => {
 			match_token(input, index, TokenType::OParen)?;
-			let list = list(input, index)?;
+			let mut list = list(input, index)?;
 			match_token(input, index, TokenType::CParen)?;
-			Ok(SExpression::List(list))
+			if list.len() == 1 {
+				Ok(list.remove(0))
+			} else {
+				Ok(SExpression::List(list))
+			}
 		}
 
 		_ => {
@@ -487,7 +499,11 @@ fn program<'a>(
 	while *index < input.len() {
 		program.push(s_expr(input, index)?);
 	}
-	Ok(SExpression::List(program))
+	if program.len() == 1 {
+		Ok(program.remove(0))
+	} else {
+		Ok(SExpression::List(program))
+	}
 }
 
 fn expected(s: &str) -> String {

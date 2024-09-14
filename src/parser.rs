@@ -14,46 +14,50 @@ pub(crate) enum ValueType {
 	TypeName(String),
 }
 
-#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Op {
 	Add,
-	Sub,
-	Mul,
-	DivMod,
+	AndB,
+	AndL,
+	CmpEq,
+	CmpGE,
+	CmpGT,
+	CmpLE,
+	CmpLT,
+	CmpNE,
+	Deref,
 	Div,
-	Mod,
-	LShift,
-	RShift,
+	DivMod,
+	FieldAccess,
 	LRotate,
-	RRotate,
-	And,
-	Or,
-	Xor,
-	Not,
+	LShift,
+	Mod,
+	Mul,
 	Neg,
+	Not,
+	OrB,
+	OrL,
+	Ref,
+	RRotate,
+	RShift,
+	Sub,
+	XorB,
+	XorL,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Expression {
-	/// literal := _number:64b_ value-type
-	Literal(u64,Option<ValueType>),
-	/// function-call := ident expr*
-	FnCall(String, Vec<Expression>),
+#[derive(Debug, Clone, PartialEq)]
+enum S<'a> {
+	Atom(Token<'a>),
+	Cons(Token<'a>, Vec<S<'a>>),
 }
 
-#[derive(Debug, PartialEq)]
-pub(crate) enum SExpression<'a> {
-	Expr(Token<'a>),
-	List(Vec<SExpression<'a>>),
-}
-
-impl std::fmt::Display for SExpression<'_> {
+impl std::fmt::Display for S<'_> {
 	fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
 		match self {
-			SExpression::Expr(token) => write!(fmt, "{:?}", token.tt),
-			SExpression::List(list) => {
-				let out = list.iter().map(|i| format!("{i}")).collect::<Vec<String>>().join(" ");
-				write!(fmt, "({out})")
+			S::Atom(token) => write!(fmt, "{token}"),
+			S::Cons(head,rest) => {
+				let out = rest.iter().map(|i| format!("{i}")).collect::<Vec<String>>().join(" ");
+				write!(fmt, "({head} {out})")
 			}
 		}
 	}
@@ -61,29 +65,31 @@ impl std::fmt::Display for SExpression<'_> {
 
 pub fn eval<'a>(
 	input: Vec<Token<'a>>,
-) -> miette::Result<SExpression<'a>> {
+) -> miette::Result<Vec<Stmt<'a>>> {
 	if input.len() == 0 {
 		miette::bail!("Empty input");
 	}
 
-	let mut index = 0;
-	let ast = program(&input, &mut index)?;
-	Ok(ast)
+	let mut parser = Parser {
+		input: &input,
+		index: 0,
+	};
+
+	program(&mut parser)
 }
 
 fn num(
-	input: &[Token],
-	index: &mut usize,
+	parser: &mut Parser,
 ) -> miette::Result<u64> {
-	let token = input[*index].clone();
+	let token = parser.input[parser.index].clone();
 	if token.tt != TokenType::Num {
 		miette::bail!("{}", expected("Number"));
 	}
-	let out = token.get_token()
+	let out = token.to_string()
 		.parse::<f64>()
 		.into_diagnostic()
 		.wrap_err("lexer should not allow invalid floating-point values")?;
-	*index += 1;
+	parser.index += 1;
 	Ok(float_to_fixed(out))
 }
 
@@ -100,23 +106,21 @@ fn convert_float_to_fixed() {
 }
 
 fn ident(
-	input: &[Token],
-	index: &mut usize,
+	parser: &mut Parser,
 ) -> miette::Result<String> {
-	let token = input[*index].clone();
+	let token = parser.input[parser.index].clone();
 	if token.tt != TokenType::Ident {
 		miette::bail!("{}", expected("Identifier"));
 	}
-	let out = token.get_token().to_owned();
-	*index += 1;
+	let out = token.to_string().to_owned();
+	parser.index += 1;
 	Ok(out)
 }
 
 fn value_type(
-	input: &[Token],
-	index: &mut usize,
+	parser: &mut Parser,
 ) -> miette::Result<ValueType> {
-	let token = input[*index].clone();
+	let token = parser.input[parser.index].clone();
 	let out = match token.tt {
 		TokenType::U8  => ValueType::U8,
 		TokenType::U16 => ValueType::U16,
@@ -125,15 +129,14 @@ fn value_type(
 		TokenType::S16 => ValueType::S16,
 		TokenType::S32 => ValueType::S32,
 		TokenType::F16 => {
-			let Some(bit_spec) = token.get_token()
-				.strip_prefix("fw")
-			else {
+			let token_str = token.to_string();
+			let Some(bit_spec) = token_str.strip_prefix("fw") else {
 				miette::bail!("Parsed a Fixed-point Word that doesn't start with 'fw'");
 			};
 
 			let Ok(bits) = bit_spec.parse::<u8>()
 			else {
-				miette::bail!("Unable to parse {} into Fixed-point Word type", token.get_token());
+				miette::bail!("Unable to parse {token} into Fixed-point Word type");
 			};
 
 			if bits > 16 {
@@ -143,14 +146,13 @@ fn value_type(
 			ValueType::F16(bits)
 		}
 		TokenType::F32 => {
-			let Some(bit_spec) = token.get_token()
-				.strip_prefix("fl")
-			else {
+			let token_str = token.to_string();
+			let Some(bit_spec) = token_str.strip_prefix("fl") else {
 				miette::bail!("Parsed a Fixed-point Long that doesn't start with 'fl'");
 			};
 
 			let Ok(bits) = bit_spec.parse::<u8>() else {
-				miette::bail!("Unable to parse {} into Fixed-point Long type", token.get_token());
+				miette::bail!("Unable to parse {token} into Fixed-point Long type");
 			};
 
 			if bits > 32 {
@@ -159,34 +161,32 @@ fn value_type(
 			}
 			ValueType::F32(bits)
 		}
-		TokenType::Ident => ValueType::TypeName(token.get_token().to_owned()),
+		TokenType::Ident => ValueType::TypeName(token.to_string().to_owned()),
 		_ => miette::bail!("Expected Value Type"),
 	};
-	*index += 1;
+	parser.index += 1;
 	Ok(out)
 }
 
 fn ident_typed_opt(
-	input: &[Token],
-	index: &mut usize,
+	parser: &mut Parser,
 ) -> miette::Result<(String,Option<ValueType>)> {
-	let id = ident(input, index)?;
-	let val_type = value_type(input, index).ok();
+	let id = ident(parser)?;
+	let val_type = value_type(parser).ok();
 	Ok((id, val_type))
 }
 
 fn match_token(
-	input: &[Token],
-	index: &mut usize,
+	parser: &mut Parser,
 	tt: TokenType,
 ) -> miette::Result<()> {
-	if *index >= input.len() {
+	if parser.index >= parser.input.len() {
 		miette::bail!("Unexpected EOF");
 	}
 
-	let token = &input[*index];
+	let token = &parser.input[parser.index];
 	if token.tt == tt {
-		*index += 1;
+		parser.index += 1;
 		Ok(())
 	} else {
 		Err(miette::miette! {
@@ -198,312 +198,273 @@ fn match_token(
 	}
 }
 
-fn minor_expr(
-	input: &[Token],
-	index: &mut usize,
-) -> miette::Result<Expression> {
-	let token = input[*index].clone();
-	match token.tt {
-		TokenType::Let |
-		TokenType::Fn |
-		TokenType::Rec |
-		TokenType::U8 |
-		TokenType::U16 |
-		TokenType::U32 |
-		TokenType::S8 |
-		TokenType::S16 |
-		TokenType::S32 |
-		TokenType::F16 |
-		TokenType::F32 => Err(miette::miette! {
-			labels = vec![
-				LabeledSpan::at(token.range.clone(), "here"),
-			],
-			"Expected Expression",
-		}.with_source_code(token.src.to_owned())),
-
-		t @ TokenType::Plus |
-		t @ TokenType::Minus |
-		t @ TokenType::Star |
-		t @ TokenType::Slash |
-		t @ TokenType::Percent |
-		t @ TokenType::LArrow |
-		t @ TokenType::RArrow |
-		t @ TokenType::Carrot |
-		t @ TokenType::Bang |
-		t @ TokenType::Ampersand |
-		t @ TokenType::Pipe |
-		t @ TokenType::Dot |
-		t @ TokenType::CParen |
-		t @ TokenType::Eq => Err(miette::miette! {
-			labels = vec![
-				LabeledSpan::at(token.range.clone(), "here"),
-			],
-			"Unexpected {t:?}",
-		}.with_source_code(token.src.to_owned())),
-
-		TokenType::OParen => {
-			match_token(input, index, TokenType::OParen)?;
-			let out = expr(input, index)?;
-			match_token(input, index, TokenType::CParen)?;
-			Ok(out)
-		}
-
-		TokenType::Ident => {
-			let mut s = token.get_token().to_owned();
-			*index += 1;
-			while match_token(input, index, TokenType::Dot).is_ok() {
-				s.push('.');
-				s.push_str(&ident(input, index)?);
-			}
-			Ok(Expression::FnCall(s, vec![]))
-		}
-
-		TokenType::Num => {
-			let n = num(input, index)?;
-			let val_type = value_type(input, index).ok();
-			Ok(Expression::Literal(n, val_type))
-		}
-	}
-}
-
-fn gather_params(
-	input: &[Token],
-	index: &mut usize,
-	count: usize,
-) -> miette::Result<Vec<Expression>> {
-	let mut out = Vec::default();
-	for _ in 0..count {
-		out.push(minor_expr(input, index)?);
-	}
-	while input[*index].tt != TokenType::CParen {
-		out.push(minor_expr(input, index)?);
-	}
-	Ok(out)
-}
-
-fn expr(
-	input: &[Token],
-	index: &mut usize,
-) -> miette::Result<Expression> {
-	let token = input[*index].clone();
-	match token.tt {
-		TokenType::Let |
-		TokenType::Fn |
-		TokenType::Rec |
-		TokenType::U8 |
-		TokenType::U16 |
-		TokenType::U32 |
-		TokenType::S8 |
-		TokenType::S16 |
-		TokenType::S32 |
-		TokenType::F16 |
-		TokenType::F32 |
-		TokenType::Dot |
-		TokenType::OParen |
-		TokenType::CParen => Err(miette::miette! {
-			labels = vec![
-				LabeledSpan::at(token.range.clone(), "here"),
-			],
-			"Unexpected '{:?}'", token.tt,
-		}.with_source_code(token.src.to_owned())),
-
-		TokenType::Plus => {
-			match_token(input, index, TokenType::Plus)?;
-			Ok(Expression::FnCall("Add".to_string(),
-				gather_params(input, index, 1)?))
-		}
-		TokenType::Minus => {
-			match_token(input, index, TokenType::Minus)?;
-			Ok(Expression::FnCall("Sub".to_string(),
-				gather_params(input, index, 1)?))
-		}
-		TokenType::Star => {
-			match_token(input, index, TokenType::Star)?;
-			Ok(Expression::FnCall("Mul".to_string(),
-				gather_params(input, index, 2)?))
-		}
-		TokenType::Slash => {
-			match_token(input, index, TokenType::Slash)?;
-			if match_token(input, index, TokenType::Percent).is_ok() {
-				Ok(Expression::FnCall("DivMod".to_string(),
-					gather_params(input, index, 2)?))
-			} else {
-				Ok(Expression::FnCall("Div".to_string(),
-					gather_params(input, index, 2)?))
-			}
-		}
-		TokenType::Percent => {
-			match_token(input, index, TokenType::Percent)?;
-			Ok(Expression::FnCall("Mod".to_string(),
-				gather_params(input, index, 2)?))
-		}
-
-		TokenType::LArrow => {
-			match_token(input, index, TokenType::LArrow)?;
-			if match_token(input, index, TokenType::LArrow).is_ok() {
-				Ok(Expression::FnCall("ShiftL".to_string(),
-					gather_params(input, index, 2)?))
-			} else if match_token(input, index, TokenType::RArrow).is_ok() {
-				Ok(Expression::FnCall("NEq".to_string(),
-					gather_params(input, index, 2)?))
-			} else if match_token(input, index, TokenType::Eq).is_ok() {
-				Ok(Expression::FnCall("LE".to_string(),
-					gather_params(input, index, 2)?))
-			} else {
-				Ok(Expression::FnCall("LT".to_string(),
-					gather_params(input, index, 2)?))
-			}
-		}
-		TokenType::RArrow => {
-			match_token(input, index, TokenType::RArrow)?;
-			if match_token(input, index, TokenType::RArrow).is_ok() {
-				Ok(Expression::FnCall("ShiftR".to_string(),
-					gather_params(input, index, 2)?))
-			} else if match_token(input, index, TokenType::Eq).is_ok() {
-				Ok(Expression::FnCall("GE".to_string(),
-					gather_params(input, index, 2)?))
-			} else {
-				Ok(Expression::FnCall("GT".to_string(),
-					gather_params(input, index, 2)?))
-			}
-		}
-		TokenType::Ampersand => {
-			match_token(input, index, TokenType::Ampersand)?;
-			if match_token(input, index, TokenType::Ampersand).is_ok() {
-				Ok(Expression::FnCall("AndL".to_string(),
-					gather_params(input, index, 2)?))
-			} else {
-				Ok(Expression::FnCall("AndB".to_string(),
-					gather_params(input, index, 2)?))
-			}
-		}
-		TokenType::Pipe => {
-			match_token(input, index, TokenType::Pipe)?;
-			if match_token(input, index, TokenType::Pipe).is_ok() {
-				Ok(Expression::FnCall("OrL".to_string(),
-					gather_params(input, index, 2)?))
-			} else {
-				Ok(Expression::FnCall("OrB".to_string(),
-					gather_params(input, index, 2)?))
-			}
-		}
-		TokenType::Carrot => {
-			match_token(input, index, TokenType::Carrot)?;
-			if match_token(input, index, TokenType::Carrot).is_ok() {
-				Ok(Expression::FnCall("XorL".to_string(),
-					gather_params(input, index, 2)?))
-			} else {
-				Ok(Expression::FnCall("XorB".to_string(),
-					gather_params(input, index, 2)?))
-			}
-		}
-		TokenType::Bang => {
-			match_token(input, index, TokenType::Bang)?;
-			let out = vec![minor_expr(input, index)?];
-			Ok(Expression::FnCall("Not".to_string(), out))
-		}
-		TokenType::Eq => {
-			match_token(input, index, TokenType::Eq)?;
-			Ok(Expression::FnCall("Eq".to_string(),
-				gather_params(input, index, 2)?))
-		}
-		TokenType::Ident => {
-			let mut s = ident(input, index)?;
-			while match_token(input, index, TokenType::Dot).is_ok() {
-				s.push('.');
-				s.push_str(&ident(input, index)?);
-			}
-			Ok(Expression::FnCall(s, gather_params(input, index, 0)?))
-		}
-		TokenType::Num => {
-			let n = num(input, index)?;
-			let val_type = value_type(input, index).ok();
-			Ok(Expression::Literal(n, val_type))
-		}
-	}
-}
-
 fn ident_typed(
-	input: &[Token],
-	index: &mut usize,
+	parser: &mut Parser,
 ) -> miette::Result<TypedIdent> {
-	let id = ident(input, index)?;
-	let val_type = value_type(input, index)?;
+	let id = ident(parser)?;
+	let val_type = value_type(parser)?;
 	Ok((id, val_type))
 }
 
-fn param_list(
-	input: &[Token],
-	index: &mut usize,
-) -> miette::Result<Vec<TypedIdent>> {
-	let mut params = Vec::default();
-	while input[*index].tt != TokenType::CParen {
-		match_token(input, index, TokenType::OParen)?;
-		params.push(ident_typed(input, index)?);
-		match_token(input, index, TokenType::CParen)?;
-	}
-	Ok(params)
+struct Parser<'a,'b>
+where 'a: 'b
+{
+	input: &'b [Token<'a>],
+	index: usize,
 }
 
-fn list<'a>(
-	input: &[Token<'a>],
-	index: &mut usize,
-) -> miette::Result<Vec<SExpression<'a>>> {
-	let mut out = Vec::default();
-	while *index < input.len() && input[*index].tt != TokenType::CParen {
-		out.push(s_expr(input, index)?);
+impl<'a,'b> Parser<'a,'b> {
+	fn peek(&self) -> &Token<'a> {
+		&self.input[self.index]
+	}
+}
+
+enum Expr {}
+
+#[derive(Debug, Clone)]
+pub(crate) enum Stmt<'a> {
+	Rec {
+		name: String,
+		fields: Vec<(String, ValueType)>,
+	},
+	Fun {
+		name: String,
+		params: Vec<(String, ValueType)>,
+		body: Vec<Stmt<'a>>,
+		output: Option<S<'a>>,
+	},
+	Var {
+		name: String,
+		vtype: Option<ValueType>,
+		body: S<'a>,
+	},
+}
+
+/// bin_op := expr '+' expr
+///         | expr '-' expr
+///         | expr '*' expr
+///         | expr '/' expr
+///         | expr '%' expr
+///         | expr '&' expr
+///         | expr '&&' expr
+///         | expr '|' expr
+///         | expr '||' expr
+///         | expr '^' expr
+///         | expr '<' expr
+///         | expr '<<' expr
+///         | expr '<<<' expr
+///         | expr '<=' expr
+///         | expr '>' expr
+///         | expr '>>' expr
+///         | expr '>>>' expr
+///         | expr '>=' expr
+///         | expr '==' expr
+///         | expr '<>' expr
+
+/// un_op := '!' expr
+///        | '~' expr
+///        | '$' expr
+///        | '@' expr
+///        | '+' expr
+///        | '-' expr
+
+/// args := (literal (',' args)?)?
+
+/// ident_or_call := ident ('(' args ')')?
+
+/// literal := ident_or_call | num
+
+fn prefix_binding_power(op: Op) -> ((),u8) {
+	match op {
+		Op::Add | Op::Sub => ((),11),
+		Op::Ref | Op::Deref => ((),13),
+		Op::Not => ((),15),
+		_ => panic!("bad unary op"),
+	}
+}
+
+fn infix_binding_power(op: Op) -> (u8,u8) {
+	match op {
+		Op::AndL | Op::OrL | Op::XorL => (1,2),
+		Op::AndB | Op::OrB | Op::XorB => (3,4),
+		Op::CmpEq | Op::CmpNE | Op::CmpGT | Op::CmpGE | Op::CmpLT | Op::CmpLE => (5,6),
+		Op::Add | Op::Sub => (7,8),
+		Op::Mul | Op::Div | Op::Mod | Op::DivMod | Op::LShift | Op::RShift => (9,10),
+		Op::FieldAccess => (18,17),
+		_ => panic!("bad infix op"),
+	}
+}
+
+/// expr := literal
+///       | bin_op
+///       | un_op
+fn expr<'a>(
+	parser: &mut Parser<'a,'_>,
+	min_bp: u8,
+) -> miette::Result<S<'a>> {
+	use TokenType as TT;
+
+	let left_token = parser.peek().clone();
+	let mut lhs = match left_token.tt {
+		TT::Ident |
+		TT::Num => S::Atom(left_token),
+		TT::Plus => {
+			let ((),r_bp) = prefix_binding_power(Op::Add);
+			let rhs = expr(parser, r_bp)?;
+			S::Cons(left_token, vec![rhs])
+		}
+		TT::Minus => {
+			let ((),r_bp) = prefix_binding_power(Op::Sub);
+			let rhs = expr(parser, r_bp)?;
+			S::Cons(left_token, vec![rhs])
+		}
+		TT::Bang => {
+			let ((),r_bp) = prefix_binding_power(Op::Not);
+			let rhs = expr(parser, r_bp)?;
+			S::Cons(left_token, vec![rhs])
+		}
+		_ => miette::bail! {
+			"Expected Identifier, Function Call, or Literal"
+		}
+	};
+	parser.index += 1;
+
+	loop {
+		let op_token = parser.peek().clone();
+		let op = match op_token.tt {
+			TT::Amp1 => Op::AndB,
+			TT::Amp2 => Op::AndL,
+			TT::At => Op::Deref,
+			TT::Bar1 => Op::OrB,
+			TT::Bar2 => Op::OrL,
+			TT::Bang => Op::Not,
+			TT::BangEq => Op::CmpNE,
+			TT::Carrot1 => Op::XorB,
+			TT::Carrot2 => Op::XorL,
+			TT::Dollar => Op::Ref,
+			TT::Dot => Op::FieldAccess,
+			TT::Eq1 => Op::CmpEq,
+			TT::Eq2 => Op::CmpEq,
+			TT::LArrow1 => Op::CmpLT,
+			TT::LArrow2 => Op::LShift,
+			TT::LArrBar => Op::LRotate,
+			TT::LArrEq => Op::CmpLE,
+			TT::Minus => Op::Sub,
+			TT::Percent => Op::Mod,
+			TT::Plus => Op::Add,
+			TT::RArrow1 => Op::CmpGT,
+			TT::RArrow2 => Op::RShift,
+			TT::RArrBar => Op::RRotate,
+			TT::RArrEq => Op::CmpGE,
+			TT::Slash => Op::Div,
+			TT::SlashPer => Op::DivMod,
+			TT::Star => Op::Mul,
+
+			TT::Ident | TT::Num |
+			TT::If | TT::Else | TT::Fun | TT::Rec | TT::Var | TT::While |
+			TT::U8 | TT::U16 | TT::U32 | TT::S8 | TT::S16 | TT::S32 | TT::F16 | TT::F32 |
+			TT::Colon | TT::CParen | TT::OParen |
+			TT::EOF => break,
+		};
+		let (l_bp, r_bp) = infix_binding_power(op);
+
+		if l_bp < min_bp {
+			break;
+		}
+
+		parser.index += 1;
+		let rhs = expr(parser, r_bp)?;
+
+		lhs = S::Cons(op_token, vec![lhs, rhs]);
+	}
+
+	Ok(lhs)
+}
+
+/// params := ( ident ':' value_type )*
+fn params(
+	parser: &mut Parser,
+) -> miette::Result<Vec<(String, ValueType)>> {
+	let mut out = Vec::new();
+	while parser.peek().tt != TokenType::CParen {
+		let id = ident(parser)?;
+		match_token(parser, TokenType::Colon)?;
+		let vt = value_type(parser)?;
+		out.push((id,vt));
 	}
 	Ok(out)
 }
 
-fn s_expr<'a>(
-	input: &[Token<'a>],
-	index: &mut usize,
-) -> miette::Result<SExpression<'a>> {
-	if *index >= input.len() {
-		miette::bail!("Unexpected EOF");
+/// rec := 'rec' ident '(' params ')'
+fn rec<'a>(
+	parser: &mut Parser,
+) -> miette::Result<Stmt<'a>> {
+	match_token(parser, TokenType::Rec)?;
+	let name = ident(parser)?;
+	match_token(parser, TokenType::OParen)?;
+	let fields = params(parser)?;
+	match_token(parser, TokenType::CParen)?;
+	Ok(Stmt::Rec { name, fields })
+}
+
+/// fun := 'fun' ident '(' params ')' '(' statement* expr? ')'
+fn fun<'a>(
+	parser: &mut Parser<'a,'_>,
+) -> miette::Result<Stmt<'a>> {
+	match_token(parser, TokenType::Fun)?;
+	let name = ident(parser)?;
+	match_token(parser, TokenType::OParen)?;
+	let params = params(parser)?;
+	match_token(parser, TokenType::CParen)?;
+	match_token(parser, TokenType::OParen)?;
+	let mut body = Vec::new();
+	while let Ok(stmt) = statement(parser) {
+		body.push(stmt);
 	}
+	let output = expr(parser, 0).ok();
+	match_token(parser, TokenType::CParen)?;
+	Ok(Stmt::Fun { name, params, body, output })
+}
 
-	match input[*index].tt {
-		TokenType::OParen => {
-			match_token(input, index, TokenType::OParen)?;
-			let mut list = list(input, index)?;
-			match_token(input, index, TokenType::CParen)?;
-			if list.len() == 1 {
-				Ok(list.remove(0))
-			} else {
-				Ok(SExpression::List(list))
-			}
-		}
+/// var := 'var' ident (':' value_type)? '=' expr
+fn var<'a>(
+	parser: &mut Parser<'a,'_>,
+) -> miette::Result<Stmt<'a>> {
+	match_token(parser, TokenType::Var)?;
+	let name = ident(parser)?;
+	let vtype = match_token(parser, TokenType::Colon)
+		.and_then(|_| value_type(parser))
+		.ok();
+	let body = expr(parser, 0)?;
+	Ok(Stmt::Var { name, vtype, body })
+}
 
-		_ => {
-			*index += 1;
-			Ok(SExpression::Expr(input[*index-1].clone()))
-/*
-			Err(miette::miette! {
-				labels = vec![
-					LabeledSpan::at(token.range, "here"),
-				],
-				"Expected SExpression"
-			}.with_source_code(data.source.to_owned()))
-*/
-		}
+/// statement := rec | fun | var
+fn statement<'a>(
+	parser: &mut Parser<'a,'_>,
+) -> miette::Result<Stmt<'a>> {
+	match parser.peek().clone() {
+		Token { tt: TokenType::Rec, ..} => rec(parser),
+		Token { tt: TokenType::Fun, ..} => fun(parser),
+		Token { tt: TokenType::Var, ..} => var(parser),
+		token => Err(miette::miette! {
+			labels = vec![
+				LabeledSpan::at(token.range, "here"),
+			],
+			"Expected Statement"
+		}.with_source_code(token.src.to_owned())),
 	}
 }
 
+/// program := statement*
 fn program<'a>(
-	input: &[Token<'a>],
-	index: &mut usize,
-) -> miette::Result<SExpression<'a>> {
+	parser: &mut Parser<'a,'_>,
+) -> miette::Result<Vec<Stmt<'a>>> {
 	let mut program = Vec::default();
-	while *index < input.len() {
-		program.push(s_expr(input, index)?);
+	while parser.index < parser.input.len() {
+		program.push(statement(parser)?);
 	}
-	if program.len() == 1 {
-		Ok(program.remove(0))
-	} else {
-		Ok(SExpression::List(program))
-	}
+	Ok(program)
 }
 
 fn expected(s: &str) -> String {
@@ -517,7 +478,7 @@ fn let_expressions_set_unknown_value_types_to_S32(
 	let input = "let a 3";
 	let ast = eval(input, crate::lexer::eval(input)?)?;
 	assert_eq!(ast, vec![
-		SExpression::Let {
+		S::Let {
 			ident: ("a".to_string(), ValueType::S32),
 			value: Expression::Literal(3, None),
 		}
@@ -531,12 +492,12 @@ fn let_expressions_bind_value_types(
 	let input = "let (a u8) (3)";
 	let ast = eval(input, crate::lexer::eval(input)?)?;
 	assert_eq!(ast, vec![
-		SExpression::Expr(Token::new(TokenType::Let, 0..3)),
-		SExpression::List(vec![
-			SExpression::Expr(Token::new(TokenType::Ident, 5..6)),
-			SExpression::Expr(Token::new(TokenType::U8, 7..9)),
+		S::Expr(Token::new(TokenType::Let, 0..3)),
+		S::List(vec![
+			S::Expr(Token::new(TokenType::Ident, 5..6)),
+			S::Expr(Token::new(TokenType::U8, 7..9)),
 		]),
-		SExpression::Expr(Token::new(TokenType::Num, 12..13)),
+		S::Expr(Token::new(TokenType::Num, 12..13)),
 	]);
 	Ok(())
 }
@@ -548,14 +509,14 @@ fn field_accessor_in_call_position_captures_all_accesses(
 	let ast = eval(input, crate::lexer::eval(input)?)?;
 	assert_eq!(ast.len(), 3);
 	assert_eq!(ast, vec![
-		SExpression::Expr(Token::new(TokenType::Let, 0..3)),
-		SExpression::Expr(Token::new(TokenType::Ident, 5..6)),
-		SExpression::List(vec![
-			SExpression::Expr(Token::new(TokenType::Ident, 9..10)),
-			SExpression::Expr(Token::new(TokenType::Dot, 10..11)),
-			SExpression::Expr(Token::new(TokenType::Ident, 11..12)),
-			SExpression::Expr(Token::new(TokenType::Dot, 12..13)),
-			SExpression::Expr(Token::new(TokenType::Ident, 13..14)),
+		S::Expr(Token::new(TokenType::Let, 0..3)),
+		S::Expr(Token::new(TokenType::Ident, 5..6)),
+		S::List(vec![
+			S::Expr(Token::new(TokenType::Ident, 9..10)),
+			S::Expr(Token::new(TokenType::Dot, 10..11)),
+			S::Expr(Token::new(TokenType::Ident, 11..12)),
+			S::Expr(Token::new(TokenType::Dot, 12..13)),
+			S::Expr(Token::new(TokenType::Ident, 13..14)),
 		]),
 	]);
 	Ok(())

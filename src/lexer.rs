@@ -1,3 +1,4 @@
+
 use miette::LabeledSpan;
 
 use crate::tokens::{Token, TokenType};
@@ -16,6 +17,11 @@ impl<'a> Lexer<'a> {
 			index: 0,
 		}
 	}
+
+	fn next(&mut self, index: usize) {
+		self.index += index;
+		self.rest = &self.rest[index..];
+	}
 }
 
 impl<'a> Iterator for Lexer<'a> {
@@ -26,29 +32,105 @@ impl<'a> Iterator for Lexer<'a> {
 			let mut chars = self.rest.chars();
 			let c = chars.next()?;
 			let c_at = self.index;
-			self.index += c.len_utf8();
-			self.rest = chars.as_str();
+			self.next(c.len_utf8());
+			//self.index += c.len_utf8();
+			//self.rest = chars.as_str();
 
-			let output = |tt| Some(Ok(Token::new(tt,
-				self.source,
-				c_at..self.index)));
+			let output = |tt,idx| Some(Ok(Token::new(tt, self.source, c_at..idx)));
 
 			match c {
-				'&' => break output(TokenType::Ampersand),
-				'!' => break output(TokenType::Bang),
-				'.' => break output(TokenType::Dot),
-				'<' => break output(TokenType::LArrow),
-				'(' => break output(TokenType::OParen),
-				'%' => break output(TokenType::Percent),
-				'|' => break output(TokenType::Pipe),
-				'+' => break output(TokenType::Plus),
-				'-' => break output(TokenType::Minus),
-				'>' => break output(TokenType::RArrow),
-				')' => break output(TokenType::CParen),
-				'/' => break output(TokenType::Slash),
-				'*' => break output(TokenType::Star),
-				'^' => break output(TokenType::Carrot),
-				'=' => break output(TokenType::Eq),
+				')' => break output(TokenType::CParen, self.index),
+				':' => break output(TokenType::Colon, self.index),
+				'.' => break output(TokenType::Dot, self.index),
+				'(' => break output(TokenType::OParen, self.index),
+				'%' => break output(TokenType::Percent, self.index),
+				'+' => break output(TokenType::Plus, self.index),
+				'*' => break output(TokenType::Star, self.index),
+				'@' => break output(TokenType::At, self.index),
+				'$' => break output(TokenType::Dollar, self.index),
+
+				'^' => break if let Some((j,'^')) = self.rest.char_indices().next() {
+					self.next(j);
+					output(TokenType::Carrot2, self.index)
+				} else {
+					output(TokenType::Carrot1, self.index)
+				},
+				'&' => break if let Some((j,'&')) = self.rest.char_indices().next() {
+					self.next(j);
+					output(TokenType::Amp2, self.index)
+				} else {
+					output(TokenType::Amp1, self.index)
+				},
+				'!' => break if let Some((j,'=')) = self.rest.char_indices().next() {
+					self.next(j);
+					output(TokenType::BangEq, self.index)
+				} else {
+					output(TokenType::Bang, self.index)
+				},
+				'=' => break if let Some((j,'=')) = self.rest.char_indices().next() {
+					self.next(j);
+					output(TokenType::Eq2, self.index)
+				} else {
+					output(TokenType::Eq1, self.index)
+				},
+				'/' => break if let Some((j,'%')) = self.rest.char_indices().next() {
+					self.next(j);
+					output(TokenType::SlashPer, self.index)
+				} else {
+					output(TokenType::Slash, self.index)
+				},
+				'|' => break if let Some((j,'|')) = self.rest.char_indices().next() {
+					self.next(j);
+					output(TokenType::Bar2, self.index)
+				} else {
+					output(TokenType::Bar1, self.index)
+				},
+				'<' => break match self.rest.char_indices().next() {
+					Some((j,'<')) => {
+						self.next(j);
+						output(TokenType::RArrow2, self.index)
+					}
+					Some((j,'|')) => {
+						self.next(j);
+						output(TokenType::RArrBar, self.index)
+					}
+					Some((j,'=')) => {
+						self.next(j);
+						output(TokenType::RArrEq, self.index)
+					}
+					_ => output(TokenType::LArrow1, self.index),
+				},
+				'>' => break match self.rest.char_indices().next() {
+					Some((j,'>')) => {
+						self.next(j);
+						output(TokenType::RArrow2, self.index)
+					}
+					Some((j,'=')) => {
+						self.next(j);
+						output(TokenType::RArrEq, self.index)
+					}
+					_ => output(TokenType::RArrow1, self.index),
+				},
+
+				'-' => {
+					let mut inner_chars = self.rest.char_indices();
+					if let Some((j,'-')) = inner_chars.next() {
+						let mut index = j;
+						loop {
+							if let Some((j,x)) = inner_chars.next() {
+								index = j;
+								if x != '\n' {
+									continue;
+								}
+							} else {
+								index += 1;
+							}
+							break self.next(index);
+						}
+					} else {
+						break output(TokenType::Minus, self.index);
+					}
+				}
 
 				'a'..='z' | 'A'..='Z' | '_' => {
 					let mut inner_chars = self.rest.char_indices();
@@ -65,23 +147,24 @@ impl<'a> Iterator for Lexer<'a> {
 						} else {
 							index += 1;
 						}
-						self.index += index;
-						self.rest = &self.rest[index..];
-						break;
+						break self.next(index);
 					}
 
 					let ident = &self.source[c_at..self.index];
 					eprintln!("ident:{ident}");
-					let tt = match ident {
-						"fn"  => TokenType::Fn,
-						"let" => TokenType::Let,
-						"rec" => TokenType::Rec,
-						"u8"  => TokenType::U8,
-						"u16" => TokenType::U16,
-						"u32" => TokenType::U32,
-						"s8"  => TokenType::S8,
-						"s16" => TokenType::S16,
-						"s32" => TokenType::S32,
+					break output(match ident {
+						"if"    => TokenType::If,
+						"fun"   => TokenType::Fun,
+						"rec"   => TokenType::Rec,
+						"var"   => TokenType::Var,
+						"else"  => TokenType::Else,
+						"while" => TokenType::While,
+						"u8"    => TokenType::U8,
+						"u16"   => TokenType::U16,
+						"u32"   => TokenType::U32,
+						"s8"    => TokenType::S8,
+						"s16"   => TokenType::S16,
+						"s32"   => TokenType::S32,
 						_ => if ident.starts_with("fw") {
 							TokenType::F16
 						} else if ident.starts_with("fl") {
@@ -89,8 +172,7 @@ impl<'a> Iterator for Lexer<'a> {
 						} else {
 							TokenType::Ident
 						}
-					};
-					break Some(Ok(Token::new(tt, self.source, c_at..self.index)));
+					}, self.index);
 				}
 
 				'0'..='9' => {
@@ -100,7 +182,7 @@ impl<'a> Iterator for Lexer<'a> {
 					loop {
 						if let Some((j,x)) = inner_chars.next() {
 							index = j;
-							if ('0'..='9').contains(&x) {
+							if ('0'..='9').contains(&x) || x == '_' {
 								continue;
 							}
 							if x == '.' && !have_dot {
@@ -110,15 +192,9 @@ impl<'a> Iterator for Lexer<'a> {
 						} else {
 							index += 1;
 						}
-						self.index += index;
-						self.rest = &self.rest[index..];
-						break;
+						break self.next(index);
 					}
-					break Some(Ok(Token::new(
-						TokenType::Num,
-						self.source,
-						c_at..self.index,
-					)));
+					break output(TokenType::Num, self.index);
 				}
 
 				w if w.is_whitespace() => {
@@ -128,8 +204,7 @@ impl<'a> Iterator for Lexer<'a> {
 							if x.is_ascii_whitespace() {
 								continue;
 							}
-							self.index += j;
-							self.rest = &self.rest[j..];
+							self.next(j);
 						}
 						break;
 					}
@@ -152,46 +227,89 @@ impl<'a> Iterator for Lexer<'a> {
 pub(crate) fn eval(
 	input: &str,
 ) -> miette::Result<Vec<Token>> {
-	Lexer::new(input).collect()
+	use std::iter::once;
+
+	let input_rng = input.len()..input.len();
+	Lexer::new(input)
+		.chain(once(Ok(Token::new(TokenType::EOF, input, input_rng))))
+		.collect()
 }
 
-#[test]
-fn tokenizes_empty_input() -> miette::Result<()> {
-	let tokens = eval("")?;
-	assert_eq!(tokens, vec![]);
-	Ok(())
-}
+#[cfg(test)]
+mod tokenizes {
+	use super::TokenType;
 
-#[test]
-fn tokenizes_let() -> miette::Result<()> {
-	let input = "let";
-	let tokens = eval(input)?;
-	assert_eq!(tokens, vec![Token::new(TokenType::Let, input, 0..3)]);
-	Ok(())
-}
+	fn lex_test(
+		input: &str,
+		check: &[TokenType],
+	) -> miette::Result<()> {
+		use std::iter::once;
 
-#[test]
-fn tokenizes_fn() -> miette::Result<()> {
-	let input = "fn";
-	let tokens = eval(input)?;
-	assert_eq!(tokens, vec![Token::new(TokenType::Fn, input, 0..2)]);
-	Ok(())
-}
+		let tokens = crate::lexer::eval(input)?;
+		assert_eq!(tokens, check.iter()
+			.chain(once(&TokenType::EOF))
+			.collect::<Vec<&TokenType>>());
+		Ok(())
+	}
 
-#[test]
-fn tokenizes_input_without_wrapping_parentheses(
-) -> miette::Result<()> {
-	let input = "let (a u8) (3)";
-	let tokens = eval(input)?;
-	assert_eq!(tokens, vec![
-		Token::new(TokenType::Let, input, 0..3),
-		Token::new(TokenType::OParen, input, 4..5),
-		Token::new(TokenType::Ident, input, 5..6),
-		Token::new(TokenType::U8, input, 7..9),
-		Token::new(TokenType::CParen, input, 9..10),
-		Token::new(TokenType::OParen, input, 11..12),
-		Token::new(TokenType::Num, input, 12..13),
-		Token::new(TokenType::CParen, input, 13..14),
-	]);
-	Ok(())
+	#[test]
+	fn empty_input() -> miette::Result<()> {
+		lex_test("", &[])
+	}
+
+	#[test]
+	fn white_spaces_as_empty_input() -> miette::Result<()> {
+		lex_test("  \n\t  ", &[])
+	}
+
+	#[test]
+	fn comments_as_empty_input() -> miette::Result<()> {
+		lex_test("-- var if hello", &[])
+	}
+
+	#[test]
+	fn keywords() -> miette::Result<()> {
+		lex_test("var fun rec if while else", &[
+			TokenType::Var,
+			TokenType::Fun,
+			TokenType::Rec,
+			TokenType::If,
+			TokenType::While,
+			TokenType::Else,
+		])
+	}
+
+	#[test]
+	fn value_types() -> miette::Result<()> {
+		lex_test("u8 u16 u32 s8 s16 s32 fw fw4 fl fl22", &[
+			TokenType::U8,
+			TokenType::U16,
+			TokenType::U32,
+			TokenType::S8,
+			TokenType::S16,
+			TokenType::S32,
+			TokenType::F16,
+			TokenType::F16,
+			TokenType::F32,
+			TokenType::F32,
+		])
+	}
+
+	#[test]
+	fn identifiers() -> miette::Result<()> {
+		lex_test("abc_123 _123", &[
+			TokenType::Ident,
+			TokenType::Ident,
+		])
+	}
+
+	#[test]
+	fn numbers() -> miette::Result<()> {
+		lex_test("1 2.34 5_6 7_8.9", &[
+			TokenType::Num,
+			TokenType::Num,
+			TokenType::Num,
+			TokenType::Num,
+		])
+	}
 }

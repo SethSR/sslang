@@ -14,44 +14,25 @@ pub(crate) enum ValueType {
 	TypeName(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Op {
-	Add,
-	AndB,
-	AndL,
-	CmpEq,
-	CmpGE,
-	CmpGT,
-	CmpLE,
-	CmpLT,
-	CmpNE,
-	Deref,
-	Div,
-	DivMod,
-	FieldAccess,
-	LRotate,
-	LShift,
-	Mod,
-	Mul,
-	Neg,
-	Not,
-	OrB,
-	OrL,
-	Ref,
-	RRotate,
-	RShift,
-	Sub,
-	XorB,
-	XorL,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum S<'a> {
+#[derive(Clone, PartialEq)]
+pub(crate) enum S<'a> {
 	Atom(Token<'a>),
 	Cons(Token<'a>, Vec<S<'a>>),
 }
 
 use std::fmt;
+
+impl fmt::Debug for S<'_> {
+	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+		match self {
+			S::Atom(token) => write!(fmt, "{token}"),
+			S::Cons(head, rest) => {
+				let out = rest.iter().map(|i| format!("{i}")).collect::<Vec<String>>().join(" ");
+				write!(fmt, "({head} {out})")
+			}
+		}
+	}
+}
 
 impl fmt::Display for S<'_> {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -147,7 +128,7 @@ fn ident(
 fn value_type(
 	parser: &mut Parser,
 ) -> miette::Result<ValueType> {
-	let token = parser.input[parser.index].clone();
+	let token = parser.peek(0).clone();
 	let out = match token.tt {
 		TokenType::U8  => ValueType::U8,
 		TokenType::U16 => ValueType::U16,
@@ -167,8 +148,7 @@ fn value_type(
 			};
 
 			if bits > 16 {
-				miette::bail!("{}",
-					expected("Bit specifier between 0..=16"));
+				miette::bail!("Expected Bit specifier between 0..=16");
 			}
 			ValueType::F16(bits)
 		}
@@ -183,24 +163,15 @@ fn value_type(
 			};
 
 			if bits > 32 {
-				miette::bail!("{}",
-					expected("Bit specifier between 0..=32"));
+				miette::bail!("Expected Bit specifier between 0..=32");
 			}
 			ValueType::F32(bits)
 		}
-		TokenType::Ident => ValueType::TypeName(token.to_string().to_owned()),
+		TokenType::Ident => ValueType::TypeName(token.to_string()),
 		_ => miette::bail!("Expected Value Type"),
 	};
 	parser.index += 1;
 	Ok(out)
-}
-
-fn ident_typed_opt(
-	parser: &mut Parser,
-) -> miette::Result<(String,Option<ValueType>)> {
-	let id = ident(parser)?;
-	let val_type = value_type(parser).ok();
-	Ok((id, val_type))
 }
 
 fn match_token(
@@ -238,17 +209,15 @@ impl<'a,'b> Parser<'a,'b> {
 	}
 }
 
-enum Expr {}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Stmt<'a> {
 	Rec {
 		name: String,
-		fields: Vec<(String, ValueType)>,
+		fields: Vec<TypedIdent>,
 	},
 	Fun {
 		name: String,
-		params: Vec<(String, ValueType)>,
+		params: Vec<TypedIdent>,
 		body: Vec<Stmt<'a>>,
 		output: Option<S<'a>>,
 	},
@@ -380,7 +349,7 @@ fn expr<'a>(
 /// params := ( ident ':' value_type )*
 fn params(
 	parser: &mut Parser,
-) -> miette::Result<Vec<(String, ValueType)>> {
+) -> miette::Result<Vec<TypedIdent>> {
 	let mut out = Vec::new();
 	while parser.peek(0).tt != TokenType::CParen {
 		let id = ident(parser)?;
@@ -444,12 +413,7 @@ fn statement<'a>(
 		TokenType::Rec => rec(parser),
 		TokenType::Fun => fun(parser),
 		TokenType::Var => var(parser),
-		_ => Err(miette::miette! {
-			labels = vec![
-				LabeledSpan::at(parser.peek(0).range.clone(), "here"),
-			],
-			"Expected Statement"
-		}.with_source_code(parser.peek(0).src.to_owned())),
+		tt => error!(tt, parser, "Statement"),
 	}
 }
 
@@ -464,18 +428,31 @@ fn program<'a>(
 	Ok(program)
 }
 
-fn expected(s: &str) -> String {
-	format!("{s} Expected")
-}
-
 #[cfg(test)]
 mod test {
-	use crate::tokens::{Token, TokenType as TT};
-	use crate::lexer;
-	use crate::parser::{self, S, Stmt, ValueType as VT};
+	use crate::tokens::TokenType as TT;
+	use crate::parser::{S, Stmt, TypedIdent, ValueType as VT};
 
 	fn atom(tt: TT, s: &str) -> S {
+		use crate::tokens::Token;
 		S::Atom(Token::new(tt, s, 0..s.len()))
+	}
+
+	fn num(s: &str) -> S {
+		use crate::tokens::TokenType;
+		atom(TokenType::Number, s)
+	}
+
+	fn ident(s: &str) -> S {
+		use crate::tokens::TokenType;
+		atom(TokenType::Ident, s)
+	}
+
+	fn cons<'a>(tt: TT, s: &[S<'a>]) -> S<'a> {
+		S::Cons(
+			crate::tokens::Token::new(tt, "", 0..0),
+			s.into_iter().cloned().collect::<Vec<_>>(),
+		)
 	}
 
 	fn var<'a>(
@@ -492,7 +469,7 @@ mod test {
 
 	fn fun<'a>(
 		name: &'_ str,
-		params: Vec<(String, VT)>,
+		params: Vec<TypedIdent>,
 		body: Vec<Stmt<'a>>,
 		output: Option<S<'a>>,
 	) -> Stmt<'a> {
@@ -506,7 +483,7 @@ mod test {
 
 	fn rec<'a>(
 		name: &'_ str,
-		fields: Vec<(String, VT)>,
+		fields: Vec<TypedIdent>,
 	) -> Stmt<'a> {
 		Stmt::Rec {
 			name: name.to_string(),
@@ -514,11 +491,44 @@ mod test {
 		}
 	}
 
+	fn expr_test(input: &str, s: S) -> miette::Result<()> {
+		use crate::parser::{Parser, expr};
+		use crate::lexer::eval;
+
+		let mut parser = Parser {
+			input: &eval(input)?,
+			index: 0,
+		};
+		assert_eq!(expr(&mut parser, 0)?, s);
+		Ok(())
+	}
+
+	#[test]
+	fn precedence() -> miette::Result<()> {
+		expr_test("1 + 2 * 3", cons(TT::Plus, &[
+			num("1"),
+			cons(TT::Star, &[
+				num("2"),
+				num("3"),
+			]),
+		]))?;
+		expr_test("1 * 2 + 3", cons(TT::Plus, &[
+			cons(TT::Star, &[
+				num("1"),
+				num("2"),
+			]),
+			num("3"),
+		]))
+	}
+
 	fn parse_test(
 		input: &str,
 		stmts: &[Stmt],
 	) -> miette::Result<()> {
-		let ast = crate::parser::eval(crate::lexer::eval(input)?)?;
+		use crate::parser;
+		use crate::lexer;
+
+		let ast = parser::eval(lexer::eval(input)?)?;
 		assert_eq!(ast, stmts.to_vec());
 		Ok(())
 	}
@@ -529,29 +539,41 @@ mod test {
 	}
 
 	#[test]
-	fn simple_var_stmt() -> miette::Result<()> {
+	fn var_stmt() -> miette::Result<()> {
 		parse_test("var a = 0", &[
-			var("a", None, atom(TT::Number, "0")),
+			var("a", None, num("0")),
 		])
 	}
 
 	#[test]
-	fn var_with_vtype() -> miette::Result<()> {
+	fn var_stmt_expr() -> miette::Result<()> {
+		parse_test("var a = 3 * 2 + 1", &[
+			var("a", None, cons(TT::Plus, &[
+				cons(TT::Star, &[
+					num("3"),
+					num("2"),
+				]),
+				num("1"),
+			])),
+		])
+	}
+
+	#[test]
+	fn var_stmt_vtype() -> miette::Result<()> {
 		parse_test("var a: u8 = 0", &[
-			var("a", Some(VT::U8),
-				atom(TT::Number, "0")),
+			var("a", Some(VT::U8), num("0")),
 		])
 	}
 
 	#[test]
-	fn simple_fun_stmt() -> miette::Result<()> {
+	fn fun_stmt() -> miette::Result<()> {
 		parse_test("fun a () ()", &[
 			fun("a", vec![], vec![], None),
 		])
 	}
 
 	#[test]
-	fn simple_rec_stmt() -> miette::Result<()> {
+	fn rec_stmt() -> miette::Result<()> {
 		parse_test("rec a ()", &[
 			rec("a", vec![]),
 		])
@@ -559,22 +581,6 @@ mod test {
 }
 
 /*
-#[test]
-fn let_expressions_bind_value_types(
-) -> miette::Result<()> {
-	let input = "let (a u8) (3)";
-	let ast = eval(input, crate::lexer::eval(input)?)?;
-	assert_eq!(ast, vec![
-		S::Expr(Token::new(TokenType::Let, 0..3)),
-		S::List(vec![
-			S::Expr(Token::new(TokenType::Ident, 5..6)),
-			S::Expr(Token::new(TokenType::U8, 7..9)),
-		]),
-		S::Expr(Token::new(TokenType::Num, 12..13)),
-	]);
-	Ok(())
-}
-
 #[test]
 fn field_accessor_in_call_position_captures_all_accesses(
 ) -> miette::Result<()> {

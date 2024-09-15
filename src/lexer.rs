@@ -18,14 +18,9 @@ impl<'a> Lexer<'a> {
 		}
 	}
 
-	fn next(&mut self, index: usize) -> Option<()> {
-		eprintln!("index({index}) rest({})", self.rest);
+	fn next(&mut self, index: usize) {
 		self.index += index;
-		if index > self.rest.len() {
-			None
-		} else {
-			Some(self.rest = &self.rest[index..])
-		}
+		self.rest = &self.rest[index..];
 	}
 }
 
@@ -37,7 +32,7 @@ impl<'a> Iterator for Lexer<'a> {
 			let mut chars = self.rest.chars();
 			let c = chars.next()?;
 			let c_at = self.index;
-			self.next(c.len_utf8())?;
+			self.next(c.len_utf8());
 
 			let output = |tt,idx| Some(Ok(Token::new(tt, self.source, c_at..idx)));
 
@@ -53,63 +48,68 @@ impl<'a> Iterator for Lexer<'a> {
 				'$' => break output(TokenType::Dollar, self.index),
 
 				'^' => break if let Some((j,'^')) = self.rest.char_indices().next() {
-					self.next(j)?;
+					self.next(j);
 					output(TokenType::Carrot2, self.index)
 				} else {
 					output(TokenType::Carrot1, self.index)
 				},
 				'&' => break if let Some((j,'&')) = self.rest.char_indices().next() {
-					self.next(j)?;
+					self.next(j);
 					output(TokenType::Amp2, self.index)
 				} else {
 					output(TokenType::Amp1, self.index)
 				},
 				'!' => break if let Some((j,'=')) = self.rest.char_indices().next() {
-					self.next(j)?;
+					self.next(j);
 					output(TokenType::BangEq, self.index)
 				} else {
 					output(TokenType::Bang, self.index)
 				},
 				'=' => break if let Some((j,'=')) = self.rest.char_indices().next() {
-					self.next(j)?;
+					self.next(j);
 					output(TokenType::Eq2, self.index)
 				} else {
 					output(TokenType::Eq1, self.index)
 				},
 				'/' => break if let Some((j,'%')) = self.rest.char_indices().next() {
-					self.next(j)?;
+					self.next(j);
 					output(TokenType::SlashPer, self.index)
 				} else {
 					output(TokenType::Slash, self.index)
 				},
-				'|' => break if let Some((j,'|')) = self.rest.char_indices().next() {
-					self.next(j)?;
-					output(TokenType::Bar2, self.index)
-				} else {
-					output(TokenType::Bar1, self.index)
+				'|' => break match self.rest.char_indices().next() {
+					Some((j,'|')) => {
+						self.next(j);
+						output(TokenType::Bar2, self.index)
+					}
+					Some((j,'>')) => {
+						self.next(j);
+						output(TokenType::RArrBar, self.index)
+					}
+					_ => output(TokenType::Bar1, self.index),
 				},
 				'<' => break match self.rest.char_indices().next() {
 					Some((j,'<')) => {
-						self.next(j)?;
-						output(TokenType::RArrow2, self.index)
+						self.next(j);
+						output(TokenType::LArrow2, self.index)
 					}
 					Some((j,'|')) => {
-						self.next(j)?;
-						output(TokenType::RArrBar, self.index)
+						self.next(j);
+						output(TokenType::LArrBar, self.index)
 					}
 					Some((j,'=')) => {
-						self.next(j)?;
-						output(TokenType::RArrEq, self.index)
+						self.next(j);
+						output(TokenType::LArrEq, self.index)
 					}
 					_ => output(TokenType::LArrow1, self.index),
 				},
 				'>' => break match self.rest.char_indices().next() {
 					Some((j,'>')) => {
-						self.next(j)?;
+						self.next(j);
 						output(TokenType::RArrow2, self.index)
 					}
 					Some((j,'=')) => {
-						self.next(j)?;
+						self.next(j);
 						output(TokenType::RArrEq, self.index)
 					}
 					_ => output(TokenType::RArrow1, self.index),
@@ -128,7 +128,7 @@ impl<'a> Iterator for Lexer<'a> {
 							} else {
 								index += self.rest.len() - index;
 							}
-							break self.next(index)?;
+							break self.next(index);
 						}
 					} else {
 						break output(TokenType::Minus, self.index);
@@ -150,7 +150,7 @@ impl<'a> Iterator for Lexer<'a> {
 						} else {
 							index += self.rest.len() - index;
 						}
-						break self.next(index)?;
+						break self.next(index);
 					}
 
 					let ident = &self.source[c_at..self.index];
@@ -194,7 +194,7 @@ impl<'a> Iterator for Lexer<'a> {
 						} else {
 							index += self.rest.len() - index;
 						}
-						break self.next(index)?;
+						break self.next(index);
 					}
 					break output(TokenType::Number, self.index);
 				}
@@ -206,7 +206,7 @@ impl<'a> Iterator for Lexer<'a> {
 							if x.is_ascii_whitespace() {
 								continue;
 							}
-							self.next(j)?;
+							self.next(j);
 						}
 						break;
 					}

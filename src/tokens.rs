@@ -80,7 +80,12 @@ impl<'a> Token<'a> {
 
 impl PartialEq for Token<'_> {
 	fn eq(&self, rhs: &Self) -> bool {
-		self.tt == rhs.tt
+		match (self.tt, rhs.tt) {
+			(TokenType::Ident, TokenType::Ident) |
+			(TokenType::Number, TokenType::Number) =>
+				self.to_string() == rhs.to_string(),
+			_ => self.tt == rhs.tt,
+		}
 	}
 }
 

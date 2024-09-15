@@ -14,7 +14,7 @@ fn main() -> miette::Result<()> {
 			continue;
 		}
 
-		if buffer.trim() == "exit" {
+		if buffer.trim() == ":exit" {
 			break;
 		}
 
@@ -49,13 +49,7 @@ fun main() {
 
 		let tokens = lexer::eval(&buffer)?;
 
-		let ast = match parser::eval(tokens) {
-			Ok(out) => out,
-			Err(e) => {
-				eprintln!("{e}");
-				continue;
-			}
-		};
+		let ast = parser::eval(tokens)?;
 		println!("{ast:#?}");
 		//stage1::eval(&ast, 0);
 	}

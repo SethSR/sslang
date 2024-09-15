@@ -18,9 +18,14 @@ impl<'a> Lexer<'a> {
 		}
 	}
 
-	fn next(&mut self, index: usize) {
+	fn next(&mut self, index: usize) -> Option<()> {
+		eprintln!("index({index}) rest({})", self.rest);
 		self.index += index;
-		self.rest = &self.rest[index..];
+		if index > self.rest.len() {
+			None
+		} else {
+			Some(self.rest = &self.rest[index..])
+		}
 	}
 }
 
@@ -32,9 +37,7 @@ impl<'a> Iterator for Lexer<'a> {
 			let mut chars = self.rest.chars();
 			let c = chars.next()?;
 			let c_at = self.index;
-			self.next(c.len_utf8());
-			//self.index += c.len_utf8();
-			//self.rest = chars.as_str();
+			self.next(c.len_utf8())?;
 
 			let output = |tt,idx| Some(Ok(Token::new(tt, self.source, c_at..idx)));
 
@@ -50,63 +53,63 @@ impl<'a> Iterator for Lexer<'a> {
 				'$' => break output(TokenType::Dollar, self.index),
 
 				'^' => break if let Some((j,'^')) = self.rest.char_indices().next() {
-					self.next(j);
+					self.next(j)?;
 					output(TokenType::Carrot2, self.index)
 				} else {
 					output(TokenType::Carrot1, self.index)
 				},
 				'&' => break if let Some((j,'&')) = self.rest.char_indices().next() {
-					self.next(j);
+					self.next(j)?;
 					output(TokenType::Amp2, self.index)
 				} else {
 					output(TokenType::Amp1, self.index)
 				},
 				'!' => break if let Some((j,'=')) = self.rest.char_indices().next() {
-					self.next(j);
+					self.next(j)?;
 					output(TokenType::BangEq, self.index)
 				} else {
 					output(TokenType::Bang, self.index)
 				},
 				'=' => break if let Some((j,'=')) = self.rest.char_indices().next() {
-					self.next(j);
+					self.next(j)?;
 					output(TokenType::Eq2, self.index)
 				} else {
 					output(TokenType::Eq1, self.index)
 				},
 				'/' => break if let Some((j,'%')) = self.rest.char_indices().next() {
-					self.next(j);
+					self.next(j)?;
 					output(TokenType::SlashPer, self.index)
 				} else {
 					output(TokenType::Slash, self.index)
 				},
 				'|' => break if let Some((j,'|')) = self.rest.char_indices().next() {
-					self.next(j);
+					self.next(j)?;
 					output(TokenType::Bar2, self.index)
 				} else {
 					output(TokenType::Bar1, self.index)
 				},
 				'<' => break match self.rest.char_indices().next() {
 					Some((j,'<')) => {
-						self.next(j);
+						self.next(j)?;
 						output(TokenType::RArrow2, self.index)
 					}
 					Some((j,'|')) => {
-						self.next(j);
+						self.next(j)?;
 						output(TokenType::RArrBar, self.index)
 					}
 					Some((j,'=')) => {
-						self.next(j);
+						self.next(j)?;
 						output(TokenType::RArrEq, self.index)
 					}
 					_ => output(TokenType::LArrow1, self.index),
 				},
 				'>' => break match self.rest.char_indices().next() {
 					Some((j,'>')) => {
-						self.next(j);
+						self.next(j)?;
 						output(TokenType::RArrow2, self.index)
 					}
 					Some((j,'=')) => {
-						self.next(j);
+						self.next(j)?;
 						output(TokenType::RArrEq, self.index)
 					}
 					_ => output(TokenType::RArrow1, self.index),
@@ -123,9 +126,9 @@ impl<'a> Iterator for Lexer<'a> {
 									continue;
 								}
 							} else {
-								index += 1;
+								index += self.rest.len() - index;
 							}
-							break self.next(index);
+							break self.next(index)?;
 						}
 					} else {
 						break output(TokenType::Minus, self.index);
@@ -145,13 +148,12 @@ impl<'a> Iterator for Lexer<'a> {
 								continue;
 							}
 						} else {
-							index += 1;
+							index += self.rest.len() - index;
 						}
-						break self.next(index);
+						break self.next(index)?;
 					}
 
 					let ident = &self.source[c_at..self.index];
-					eprintln!("ident:{ident}");
 					break output(match ident {
 						"if"    => TokenType::If,
 						"fun"   => TokenType::Fun,
@@ -190,11 +192,11 @@ impl<'a> Iterator for Lexer<'a> {
 								continue;
 							}
 						} else {
-							index += 1;
+							index += self.rest.len() - index;
 						}
-						break self.next(index);
+						break self.next(index)?;
 					}
-					break output(TokenType::Num, self.index);
+					break output(TokenType::Number, self.index);
 				}
 
 				w if w.is_whitespace() => {
@@ -204,7 +206,7 @@ impl<'a> Iterator for Lexer<'a> {
 							if x.is_ascii_whitespace() {
 								continue;
 							}
-							self.next(j);
+							self.next(j)?;
 						}
 						break;
 					}
@@ -306,10 +308,10 @@ mod tokenizes {
 	#[test]
 	fn numbers() -> miette::Result<()> {
 		lex_test("1 2.34 5_6 7_8.9", &[
-			TokenType::Num,
-			TokenType::Num,
-			TokenType::Num,
-			TokenType::Num,
+			TokenType::Number,
+			TokenType::Number,
+			TokenType::Number,
+			TokenType::Number,
 		])
 	}
 }

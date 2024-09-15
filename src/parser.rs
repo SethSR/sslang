@@ -51,8 +51,10 @@ enum S<'a> {
 	Cons(Token<'a>, Vec<S<'a>>),
 }
 
-impl std::fmt::Display for S<'_> {
-	fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+use std::fmt;
+
+impl fmt::Display for S<'_> {
+	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
 		match self {
 			S::Atom(token) => write!(fmt, "{token}"),
 			S::Cons(head,rest) => {
@@ -78,19 +80,43 @@ pub fn eval<'a>(
 	program(&mut parser)
 }
 
+macro_rules! error {
+	(eof, $parser:expr, $msg:expr) => {
+		Err(miette::miette! {
+			labels = vec![
+				LabeledSpan::at(
+					$parser.peek(-1).range.clone(),
+					"after here")
+			],
+			"Expected {}, Found EoF", stringify!($msg)
+		}.with_source_code($parser.peek(-1).src.to_owned()))
+	};
+	($tt:expr, $parser:expr, $msg:expr) => {
+		Err(miette::miette! {
+			labels = vec![
+				LabeledSpan::at(
+					$parser.peek(0).range.clone(),
+					"here")
+			],
+			"Expected {}, Found {:?}", stringify!($msg), $tt,
+		}.with_source_code($parser.peek(0).src.to_owned()))
+	};
+}
+
 fn num(
 	parser: &mut Parser,
 ) -> miette::Result<u64> {
-	let token = parser.input[parser.index].clone();
-	if token.tt != TokenType::Num {
-		miette::bail!("{}", expected("Number"));
+	match parser.peek(0).tt {
+		TokenType::Number => {
+			parser.index += 1;
+			Ok(float_to_fixed(parser.peek(-1).to_string()
+				.parse::<f64>()
+				.into_diagnostic()
+				.wrap_err("lexer should not allow invalid floating-point values")?))
+		}
+		TokenType::EOF => error!(eof, parser, "Number"),
+		tt => error!(tt, parser, "Number"),
 	}
-	let out = token.to_string()
-		.parse::<f64>()
-		.into_diagnostic()
-		.wrap_err("lexer should not allow invalid floating-point values")?;
-	parser.index += 1;
-	Ok(float_to_fixed(out))
 }
 
 fn float_to_fixed(n: f64) -> u64 {
@@ -108,13 +134,14 @@ fn convert_float_to_fixed() {
 fn ident(
 	parser: &mut Parser,
 ) -> miette::Result<String> {
-	let token = parser.input[parser.index].clone();
-	if token.tt != TokenType::Ident {
-		miette::bail!("{}", expected("Identifier"));
+	match parser.peek(0).tt {
+		TokenType::Ident => {
+			parser.index += 1;
+			Ok(parser.peek(-1).to_string())
+		}
+		TokenType::EOF => error!(eof, parser, "Identifier"),
+		tt => error!(tt, parser, "Identifier"),
 	}
-	let out = token.to_string().to_owned();
-	parser.index += 1;
-	Ok(out)
 }
 
 fn value_type(
@@ -180,21 +207,13 @@ fn match_token(
 	parser: &mut Parser,
 	tt: TokenType,
 ) -> miette::Result<()> {
-	if parser.index >= parser.input.len() {
-		miette::bail!("Unexpected EOF");
-	}
-
-	let token = &parser.input[parser.index];
-	if token.tt == tt {
-		parser.index += 1;
-		Ok(())
-	} else {
-		Err(miette::miette! {
-			labels = vec![
-				LabeledSpan::at(token.range.clone(), "here")
-			],
-			"Expected {tt:?}",
-		}.with_source_code(token.src.to_owned()))
+	match parser.peek(0).tt {
+		t if t != tt => if t == TokenType::EOF {
+			error!(t, parser, tt)
+		} else {
+			error!(eof, parser, tt)
+		}
+		_ => Ok(parser.index += 1),
 	}
 }
 
@@ -214,14 +233,14 @@ where 'a: 'b
 }
 
 impl<'a,'b> Parser<'a,'b> {
-	fn peek(&self) -> &Token<'a> {
-		&self.input[self.index]
+	fn peek(&self, offset: isize) -> &Token<'a> {
+		&self.input[self.index.saturating_add_signed(offset)]
 	}
 }
 
 enum Expr {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Stmt<'a> {
 	Rec {
 		name: String,
@@ -274,23 +293,30 @@ pub(crate) enum Stmt<'a> {
 
 /// literal := ident_or_call | num
 
-fn prefix_binding_power(op: Op) -> ((),u8) {
-	match op {
-		Op::Add | Op::Sub => ((),11),
-		Op::Ref | Op::Deref => ((),13),
-		Op::Not => ((),15),
+fn prefix_binding_power(tt: TokenType) -> ((),u8) {
+	use TokenType as TT;
+
+	match tt {
+		TT::Plus | TT::Minus => ((),11),
+		TT::Dollar | TT::At => ((),13),
+		TT::Bang => ((),15),
 		_ => panic!("bad unary op"),
 	}
 }
 
-fn infix_binding_power(op: Op) -> (u8,u8) {
-	match op {
-		Op::AndL | Op::OrL | Op::XorL => (1,2),
-		Op::AndB | Op::OrB | Op::XorB => (3,4),
-		Op::CmpEq | Op::CmpNE | Op::CmpGT | Op::CmpGE | Op::CmpLT | Op::CmpLE => (5,6),
-		Op::Add | Op::Sub => (7,8),
-		Op::Mul | Op::Div | Op::Mod | Op::DivMod | Op::LShift | Op::RShift => (9,10),
-		Op::FieldAccess => (18,17),
+fn infix_binding_power(tt: TokenType) -> (u8,u8) {
+	use TokenType as TT;
+
+	match tt {
+		TT::Amp2 | TT::Bar2 | TT::Carrot2 => (1,2),
+		TT::Amp1 | TT::Bar1 | TT::Carrot1 => (3,4),
+		TT::Eq2 | TT::BangEq |
+		TT::RArrow1 | TT::RArrEq |
+		TT::LArrow1 | TT::LArrEq => (5,6),
+		TT::Plus | TT::Minus => (7,8),
+		TT::Star | TT::Slash | TT::Percent | TT::SlashPer |
+		TT::LArrow2 | TT::RArrow2 => (9,10),
+		TT::Dot => (18,17),
 		_ => panic!("bad infix op"),
 	}
 }
@@ -304,69 +330,40 @@ fn expr<'a>(
 ) -> miette::Result<S<'a>> {
 	use TokenType as TT;
 
-	let left_token = parser.peek().clone();
+	let left_token = parser.peek(0).clone();
 	let mut lhs = match left_token.tt {
 		TT::Ident |
-		TT::Num => S::Atom(left_token),
-		TT::Plus => {
-			let ((),r_bp) = prefix_binding_power(Op::Add);
+		TT::Number => S::Atom(left_token),
+		tt @ TT::Plus |
+		tt @ TT::Minus |
+		tt @ TT::Dollar |
+		tt @ TT::At |
+		tt @ TT::Bang => {
+			let ((),r_bp) = prefix_binding_power(tt);
 			let rhs = expr(parser, r_bp)?;
 			S::Cons(left_token, vec![rhs])
 		}
-		TT::Minus => {
-			let ((),r_bp) = prefix_binding_power(Op::Sub);
-			let rhs = expr(parser, r_bp)?;
-			S::Cons(left_token, vec![rhs])
-		}
-		TT::Bang => {
-			let ((),r_bp) = prefix_binding_power(Op::Not);
-			let rhs = expr(parser, r_bp)?;
-			S::Cons(left_token, vec![rhs])
-		}
-		_ => miette::bail! {
-			"Expected Identifier, Function Call, or Literal"
-		}
+		TT::EOF => return error!(eof, parser,
+			"Identifier, Function Call, or Literal"),
+		tt => return error!(tt, parser,
+			"Identifier, Function Call, or Literal"),
 	};
 	parser.index += 1;
 
 	loop {
-		let op_token = parser.peek().clone();
-		let op = match op_token.tt {
-			TT::Amp1 => Op::AndB,
-			TT::Amp2 => Op::AndL,
-			TT::At => Op::Deref,
-			TT::Bar1 => Op::OrB,
-			TT::Bar2 => Op::OrL,
-			TT::Bang => Op::Not,
-			TT::BangEq => Op::CmpNE,
-			TT::Carrot1 => Op::XorB,
-			TT::Carrot2 => Op::XorL,
-			TT::Dollar => Op::Ref,
-			TT::Dot => Op::FieldAccess,
-			TT::Eq1 => Op::CmpEq,
-			TT::Eq2 => Op::CmpEq,
-			TT::LArrow1 => Op::CmpLT,
-			TT::LArrow2 => Op::LShift,
-			TT::LArrBar => Op::LRotate,
-			TT::LArrEq => Op::CmpLE,
-			TT::Minus => Op::Sub,
-			TT::Percent => Op::Mod,
-			TT::Plus => Op::Add,
-			TT::RArrow1 => Op::CmpGT,
-			TT::RArrow2 => Op::RShift,
-			TT::RArrBar => Op::RRotate,
-			TT::RArrEq => Op::CmpGE,
-			TT::Slash => Op::Div,
-			TT::SlashPer => Op::DivMod,
-			TT::Star => Op::Mul,
-
-			TT::Ident | TT::Num |
-			TT::If | TT::Else | TT::Fun | TT::Rec | TT::Var | TT::While |
-			TT::U8 | TT::U16 | TT::U32 | TT::S8 | TT::S16 | TT::S32 | TT::F16 | TT::F32 |
+		let op_token = parser.peek(0).clone();
+		if matches!(op_token.tt,
+			TT::Ident | TT::Number |
+			TT::If | TT::Else | TT::While |
+			TT::Fun | TT::Rec | TT::Var |
+			TT::U8 | TT::U16 | TT::U32 |
+			TT::S8 | TT::S16 | TT::S32 |
+			TT::F16 | TT::F32 |
 			TT::Colon | TT::CParen | TT::OParen |
-			TT::EOF => break,
+			TT::EOF) {
+			break;
 		};
-		let (l_bp, r_bp) = infix_binding_power(op);
+		let (l_bp, r_bp) = infix_binding_power(op_token.tt);
 
 		if l_bp < min_bp {
 			break;
@@ -374,7 +371,6 @@ fn expr<'a>(
 
 		parser.index += 1;
 		let rhs = expr(parser, r_bp)?;
-
 		lhs = S::Cons(op_token, vec![lhs, rhs]);
 	}
 
@@ -386,7 +382,7 @@ fn params(
 	parser: &mut Parser,
 ) -> miette::Result<Vec<(String, ValueType)>> {
 	let mut out = Vec::new();
-	while parser.peek().tt != TokenType::CParen {
+	while parser.peek(0).tt != TokenType::CParen {
 		let id = ident(parser)?;
 		match_token(parser, TokenType::Colon)?;
 		let vt = value_type(parser)?;
@@ -435,6 +431,7 @@ fn var<'a>(
 	let vtype = match_token(parser, TokenType::Colon)
 		.and_then(|_| value_type(parser))
 		.ok();
+	match_token(parser, TokenType::Eq1)?;
 	let body = expr(parser, 0)?;
 	Ok(Stmt::Var { name, vtype, body })
 }
@@ -443,16 +440,16 @@ fn var<'a>(
 fn statement<'a>(
 	parser: &mut Parser<'a,'_>,
 ) -> miette::Result<Stmt<'a>> {
-	match parser.peek().clone() {
-		Token { tt: TokenType::Rec, ..} => rec(parser),
-		Token { tt: TokenType::Fun, ..} => fun(parser),
-		Token { tt: TokenType::Var, ..} => var(parser),
-		token => Err(miette::miette! {
+	match parser.peek(0).tt {
+		TokenType::Rec => rec(parser),
+		TokenType::Fun => fun(parser),
+		TokenType::Var => var(parser),
+		_ => Err(miette::miette! {
 			labels = vec![
-				LabeledSpan::at(token.range, "here"),
+				LabeledSpan::at(parser.peek(0).range.clone(), "here"),
 			],
 			"Expected Statement"
-		}.with_source_code(token.src.to_owned())),
+		}.with_source_code(parser.peek(0).src.to_owned())),
 	}
 }
 
@@ -461,7 +458,7 @@ fn program<'a>(
 	parser: &mut Parser<'a,'_>,
 ) -> miette::Result<Vec<Stmt<'a>>> {
 	let mut program = Vec::default();
-	while parser.index < parser.input.len() {
+	while parser.peek(0).tt != TokenType::EOF {
 		program.push(statement(parser)?);
 	}
 	Ok(program)
@@ -471,21 +468,97 @@ fn expected(s: &str) -> String {
 	format!("{s} Expected")
 }
 
-/*
-#[test]
-fn let_expressions_set_unknown_value_types_to_S32(
-) -> miette::Result<()> {
-	let input = "let a 3";
-	let ast = eval(input, crate::lexer::eval(input)?)?;
-	assert_eq!(ast, vec![
-		S::Let {
-			ident: ("a".to_string(), ValueType::S32),
-			value: Expression::Literal(3, None),
+#[cfg(test)]
+mod test {
+	use crate::tokens::{Token, TokenType as TT};
+	use crate::lexer;
+	use crate::parser::{self, S, Stmt, ValueType as VT};
+
+	fn atom(tt: TT, s: &str) -> S {
+		S::Atom(Token::new(tt, s, 0..s.len()))
+	}
+
+	fn var<'a>(
+		name: &'_ str,
+		vtype: Option<VT>,
+		body: S<'a>,
+	) -> Stmt<'a> {
+		Stmt::Var {
+			name: name.to_string(),
+			vtype,
+			body,
 		}
-	]);
-	Ok(())
+	}
+
+	fn fun<'a>(
+		name: &'_ str,
+		params: Vec<(String, VT)>,
+		body: Vec<Stmt<'a>>,
+		output: Option<S<'a>>,
+	) -> Stmt<'a> {
+		Stmt::Fun {
+			name: name.to_string(),
+			params,
+			body,
+			output,
+		}
+	}
+
+	fn rec<'a>(
+		name: &'_ str,
+		fields: Vec<(String, VT)>,
+	) -> Stmt<'a> {
+		Stmt::Rec {
+			name: name.to_string(),
+			fields,
+		}
+	}
+
+	fn parse_test(
+		input: &str,
+		stmts: &[Stmt],
+	) -> miette::Result<()> {
+		let ast = crate::parser::eval(crate::lexer::eval(input)?)?;
+		assert_eq!(ast, stmts.to_vec());
+		Ok(())
+	}
+
+	#[test]
+	fn empty_input() -> miette::Result<()> {
+		parse_test("", &[])
+	}
+
+	#[test]
+	fn simple_var_stmt() -> miette::Result<()> {
+		parse_test("var a = 0", &[
+			var("a", None, atom(TT::Number, "0")),
+		])
+	}
+
+	#[test]
+	fn var_with_vtype() -> miette::Result<()> {
+		parse_test("var a: u8 = 0", &[
+			var("a", Some(VT::U8),
+				atom(TT::Number, "0")),
+		])
+	}
+
+	#[test]
+	fn simple_fun_stmt() -> miette::Result<()> {
+		parse_test("fun a () ()", &[
+			fun("a", vec![], vec![], None),
+		])
+	}
+
+	#[test]
+	fn simple_rec_stmt() -> miette::Result<()> {
+		parse_test("rec a ()", &[
+			rec("a", vec![]),
+		])
+	}
 }
 
+/*
 #[test]
 fn let_expressions_bind_value_types(
 ) -> miette::Result<()> {

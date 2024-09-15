@@ -25,8 +25,8 @@ pub(crate) enum TokenType {
 	F32, // fl[0-9]*
 
 	// Literals
-	Ident, // [a-zA-Z_][a-zA-Z0-9_]*
-	Num,   // [0-9_]+\.?[0-9_]*
+	Ident,  // [a-zA-Z_][a-zA-Z0-9_]*
+	Number, // [0-9_]+\.?[0-9_]*
 
 	// Operators
 	Amp1,     // &
@@ -96,19 +96,20 @@ impl PartialEq<&TokenType> for Token<'_> {
 	}
 }
 
-impl std::fmt::Display for Token<'_> {
-	fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-		write!(fmt, "{}", &self.src[self.range.clone()])
+use std::fmt;
+
+impl fmt::Display for Token<'_> {
+	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+		let text = &self.src[self.range.clone()];
+		write!(fmt, "{text}")
 	}
 }
 
-impl std::fmt::Debug for Token<'_> {
-	fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-		match self.tt {
-			TokenType::Ident => write!(fmt, "Ident({})", &self.src[self.range.clone()]),
-			TokenType::Num   => write!(fmt, "Num({})", &self.src[self.range.clone()]),
-			_ => write!(fmt, "{:?}", self.tt),
-		}
+impl fmt::Debug for Token<'_> {
+	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+		let tt = self.tt;
+		let text = &self.src[self.range.clone()];
+		write!(fmt, "{tt:?}({text})")
 	}
 }
 

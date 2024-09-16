@@ -34,104 +34,111 @@ impl<'a> Iterator for Lexer<'a> {
 			let c_at = self.index;
 			self.next(c.len_utf8());
 
-			let output = |tt,idx| Some(Ok(Token::new(tt, self.source, c_at..idx)));
+			let output = |tt| Some(Ok(Token::new(tt, c_at)));
 
 			match c {
-				')' => break output(TokenType::CParen, self.index),
-				':' => break output(TokenType::Colon, self.index),
-				'.' => break output(TokenType::Dot, self.index),
-				'(' => break output(TokenType::OParen, self.index),
-				'%' => break output(TokenType::Percent, self.index),
-				'+' => break output(TokenType::Plus, self.index),
-				'*' => break output(TokenType::Star, self.index),
-				'@' => break output(TokenType::At, self.index),
-				'$' => break output(TokenType::Dollar, self.index),
+				'$' => break output(TokenType::Dollar),
+				'%' => break output(TokenType::Percent),
+				'(' => break output(TokenType::OParen),
+				')' => break output(TokenType::CParen),
+				'*' => break output(TokenType::Star),
+				'+' => break output(TokenType::Plus),
+				',' => break output(TokenType::Comma),
+				'.' => break output(TokenType::Dot),
+				':' => break output(TokenType::Colon),
+				'@' => break output(TokenType::At),
 
 				'^' => break if let Some((j,'^')) = self.rest.char_indices().next() {
-					self.next(j);
-					output(TokenType::Carrot2, self.index)
+					self.next(j+1);
+					output(TokenType::Carrot2)
 				} else {
-					output(TokenType::Carrot1, self.index)
+					output(TokenType::Carrot1)
 				},
 				'&' => break if let Some((j,'&')) = self.rest.char_indices().next() {
-					self.next(j);
-					output(TokenType::Amp2, self.index)
+					self.next(j+1);
+					output(TokenType::Amp2)
 				} else {
-					output(TokenType::Amp1, self.index)
+					output(TokenType::Amp1)
 				},
 				'!' => break if let Some((j,'=')) = self.rest.char_indices().next() {
-					self.next(j);
-					output(TokenType::BangEq, self.index)
+					self.next(j+1);
+					output(TokenType::BangEq)
 				} else {
-					output(TokenType::Bang, self.index)
+					output(TokenType::Bang)
 				},
 				'=' => break if let Some((j,'=')) = self.rest.char_indices().next() {
-					self.next(j);
-					output(TokenType::Eq2, self.index)
+					self.next(j+1);
+					output(TokenType::Eq2)
 				} else {
-					output(TokenType::Eq1, self.index)
+					output(TokenType::Eq1)
 				},
 				'/' => break if let Some((j,'%')) = self.rest.char_indices().next() {
-					self.next(j);
-					output(TokenType::SlashPer, self.index)
+					self.next(j+1);
+					output(TokenType::SlashPer)
 				} else {
-					output(TokenType::Slash, self.index)
+					output(TokenType::Slash)
 				},
 				'|' => break match self.rest.char_indices().next() {
 					Some((j,'|')) => {
-						self.next(j);
-						output(TokenType::Bar2, self.index)
+						self.next(j+1);
+						output(TokenType::Bar2)
 					}
 					Some((j,'>')) => {
-						self.next(j);
-						output(TokenType::RArrBar, self.index)
+						self.next(j+1);
+						output(TokenType::RArrBar)
 					}
-					_ => output(TokenType::Bar1, self.index),
+					_ => output(TokenType::Bar1),
 				},
 				'<' => break match self.rest.char_indices().next() {
 					Some((j,'<')) => {
-						self.next(j);
-						output(TokenType::LArrow2, self.index)
+						self.next(j+1);
+						output(TokenType::LArrow2)
 					}
 					Some((j,'|')) => {
-						self.next(j);
-						output(TokenType::LArrBar, self.index)
+						self.next(j+1);
+						output(TokenType::LArrBar)
 					}
 					Some((j,'=')) => {
-						self.next(j);
-						output(TokenType::LArrEq, self.index)
+						self.next(j+1);
+						output(TokenType::LArrEq)
 					}
-					_ => output(TokenType::LArrow1, self.index),
+					_ => output(TokenType::LArrow1),
 				},
 				'>' => break match self.rest.char_indices().next() {
 					Some((j,'>')) => {
-						self.next(j);
-						output(TokenType::RArrow2, self.index)
+						self.next(j+1);
+						output(TokenType::RArrow2)
 					}
 					Some((j,'=')) => {
-						self.next(j);
-						output(TokenType::RArrEq, self.index)
+						self.next(j+1);
+						output(TokenType::RArrEq)
 					}
-					_ => output(TokenType::RArrow1, self.index),
+					_ => output(TokenType::RArrow1),
 				},
 
 				'-' => {
 					let mut inner_chars = self.rest.char_indices();
-					if let Some((j,'-')) = inner_chars.next() {
-						let mut index = j;
-						loop {
-							if let Some((j,x)) = inner_chars.next() {
-								index = j;
-								if x != '\n' {
-									continue;
+					match inner_chars.next() {
+						Some((j,'-')) => {
+							let mut index = j;
+							loop {
+								if let Some((j,x)) = inner_chars.next() {
+									index = j;
+									if x != '\n' {
+										continue;
+									}
+								} else {
+									index += self.rest.len() - index;
 								}
-							} else {
-								index += self.rest.len() - index;
+								self.next(index);
+								break;
 							}
-							break self.next(index);
 						}
-					} else {
-						break output(TokenType::Minus, self.index);
+						Some((j,'>')) => {
+							self.next(j+1);
+							break output(TokenType::RetArrow);
+						}
+						_ => break output(TokenType::Minus),
 					}
 				}
 
@@ -167,14 +174,14 @@ impl<'a> Iterator for Lexer<'a> {
 						"s8"    => TokenType::S8,
 						"s16"   => TokenType::S16,
 						"s32"   => TokenType::S32,
-						_ => if ident.starts_with("fw") {
-							TokenType::F16
+						s => if ident.starts_with("fw") {
+							TokenType::F16(s)
 						} else if ident.starts_with("fl") {
-							TokenType::F32
+							TokenType::F32(s)
 						} else {
-							TokenType::Ident
+							TokenType::Ident(s)
 						}
-					}, self.index);
+					});
 				}
 
 				'0'..='9' => {
@@ -196,7 +203,8 @@ impl<'a> Iterator for Lexer<'a> {
 						}
 						break self.next(index);
 					}
-					break output(TokenType::Number, self.index);
+					let s = &self.source[c_at..self.index];
+					break output(TokenType::Number(s));
 				}
 
 				w if w.is_whitespace() => {
@@ -231,9 +239,8 @@ pub(crate) fn eval(
 ) -> miette::Result<Vec<Token>> {
 	use std::iter::once;
 
-	let input_rng = input.len()..input.len();
 	Lexer::new(input)
-		.chain(once(Ok(Token::new(TokenType::EOF, input, input_rng))))
+		.chain(once(Ok(Token::new(TokenType::EOF, input.len()))))
 		.collect()
 }
 
@@ -290,28 +297,28 @@ mod tokenizes {
 			TokenType::S8,
 			TokenType::S16,
 			TokenType::S32,
-			TokenType::F16,
-			TokenType::F16,
-			TokenType::F32,
-			TokenType::F32,
+			TokenType::F16("fw"),
+			TokenType::F16("fw4"),
+			TokenType::F32("fl"),
+			TokenType::F32("fl22"),
 		])
 	}
 
 	#[test]
 	fn identifiers() -> miette::Result<()> {
 		lex_test("abc_123 _123", &[
-			TokenType::Ident,
-			TokenType::Ident,
+			TokenType::Ident("abc_123"),
+			TokenType::Ident("_123"),
 		])
 	}
 
 	#[test]
 	fn numbers() -> miette::Result<()> {
 		lex_test("1 2.34 5_6 7_8.9", &[
-			TokenType::Number,
-			TokenType::Number,
-			TokenType::Number,
-			TokenType::Number,
+			TokenType::Number("1"),
+			TokenType::Number("2.34"),
+			TokenType::Number("5_6"),
+			TokenType::Number("7_8.9"),
 		])
 	}
 }

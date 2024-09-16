@@ -18,38 +18,8 @@ fn main() -> miette::Result<()> {
 			break;
 		}
 
-		let _test = "
-rec vec {
-	x: fl,
-	y: fl,
-}
-
-rec quat {
-	s: fl,
-	v: fl,
-}
-
-fun main() {
-	let x: fl12 = 0.44;
-	let y: fl12 = 0.01;
-
-	let p = vec { x, y };
-	let q = vec { 1.5, 2.6 };
-
-	fun vmul(a: vec, b: vec) -> quat {
-		quat {
-			a.x * b.x + a.y * b.y,
-			a.x * b.y - b.x * a.y,
-		}
-	}
-
-	vmul(p,q)
-}
-";
-
 		let tokens = lexer::eval(&buffer)?;
-
-		let ast = parser::eval(tokens)?;
+		let ast = parser::eval(&buffer, tokens)?;
 		println!("{ast:#?}");
 		//stage1::eval(&ast, 0);
 	}

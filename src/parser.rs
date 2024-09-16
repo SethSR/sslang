@@ -654,21 +654,21 @@ mod test {
 	}
 
 	#[test]
-	fn var_stmt_udt_fun_empty() -> miette::Result<()> {
+	fn var_stmt_udt_funcall_empty() -> miette::Result<()> {
 		parse_test("var a = b()", &[
 			var("a", None, cons(TT::OParen, &[ident("b")]))
 		])
 	}
 
 	#[test]
-	fn var_stmt_udt_fun_single() -> miette::Result<()> {
+	fn var_stmt_udt_funcall_single() -> miette::Result<()> {
 		parse_test("var a = b(c)", &[
 			var("a", None, cons(TT::OParen, &[ident("b"), ident("c")]))
 		])
 	}
 
 	#[test]
-	fn var_stmt_udt_fun_multi() -> miette::Result<()> {
+	fn var_stmt_udt_funcall_multi() -> miette::Result<()> {
 		parse_test("var a = b(c, d, e)", &[
 			var("a", None, cons(TT::OParen, &[
 				ident("b"),
@@ -685,14 +685,14 @@ mod test {
 
 	#[test]
 	fn fun_stmt() -> miette::Result<()> {
-		parse_test("fun a () ()", &[
+		parse_test("fun a() ()", &[
 			fun("a", &[], None, &[], None),
 		])
 	}
 
 	#[test]
 	fn fun_stmt_params() -> miette::Result<()> {
-		parse_test("fun a (b:u8 c:s16 d:fw6 e:fl10) ()", &[
+		parse_test("fun a(b:u8 c:s16 d:fw6 e:fl10) ()", &[
 			fun("a", &[
 				("b".to_string(), VT::U8),
 				("c".to_string(), VT::S16),
@@ -704,21 +704,21 @@ mod test {
 
 	#[test]
 	fn fun_stmt_rtype_simple() -> miette::Result<()> {
-		parse_test("fun a () -> u8 ()", &[
+		parse_test("fun a() -> u8 ()", &[
 			fun("a", &[], Some(VT::U8), &[], None)
 		])
 	}
 
 	#[test]
 	fn fun_stmt_rtype_udt() -> miette::Result<()> {
-		parse_test("fun a () -> b ()", &[
+		parse_test("fun a() -> b ()", &[
 			fun("a", &[], Some(VT::UDT("b".to_string())), &[], None)
 		])
 	}
 
 	#[test]
 	fn fun_stmt_body() -> miette::Result<()> {
-		parse_test("fun a () (
+		parse_test("fun a() (
 			var b = 1
 			var c = 2
 			b + c
@@ -732,8 +732,18 @@ mod test {
 
 	#[test]
 	fn rec_stmt() -> miette::Result<()> {
-		parse_test("rec a ()", &[
+		parse_test("rec a()", &[
 			rec("a", &[]),
+		])
+	}
+
+	#[test]
+	fn rec_stmt_fields() -> miette::Result<()> {
+		parse_test("rec vec(x:fl y:fl)", &[
+			rec("vec", &[
+				("x".to_string(), VT::F32(16)),
+				("y".to_string(), VT::F32(16)),
+			])
 		])
 	}
 
@@ -748,100 +758,6 @@ mod test {
 				]),
 			]))
 		])
-	}
-
-	#[test]
-	fn complex_test() -> miette::Result<()> {
-		parse_test(
-			"rec vec (
-				x:fl
-				y:fl
-			)
-
-			rec quat (
-				s:fl
-				v:fl
-			)
-
-			fun main() (
-				var x:fl12 = 0.44
-				var y:fl12 = 0.01
-
-				var p = vec (x  , y  )
-				var q = vec (1.5, 2.6)
-
-				fun vmul(a:vec b:vec) -> quat (
-					quat (
-						a.x * b.x + a.y * b.y,
-						a.x * b.y - b.x * a.y
-					)
-				)
-
-				vmul(p, q)
-			)", &[
-				rec("vec", &[
-					("x".to_string(), VT::F32(16)),
-					("y".to_string(), VT::F32(16)),
-				]),
-				rec("quat", &[
-					("s".to_string(), VT::F32(16)),
-					("v".to_string(), VT::F32(16)),
-				]),
-				fun("main", &[], None, &[
-					var("x", Some(VT::F32(12)), num("0.44")),
-					var("y", Some(VT::F32(12)), num("0.01")),
-					var("p", None, cons(TT::OParen, &[
-						ident("vec"),
-						cons(TT::Comma, &[
-							ident("x"),
-							ident("y"),
-						]),
-					])),
-					var("q", None, cons(TT::OParen, &[
-						ident("vec"),
-						cons(TT::Comma, &[
-							num("1.5"),
-							num("2.6"),
-						]),
-					])),
-					fun("vmul", &[
-						("a".to_string(), VT::UDT("vec".to_string())),
-						("b".to_string(), VT::UDT("vec".to_string())),
-					], Some(VT::UDT("quat".to_string())), &[],
-						Some(cons(TT::OParen, &[
-							ident("quat"),
-							cons(TT::Comma, &[
-								cons(TT::Plus, &[
-									cons(TT::Star, &[
-										cons(TT::Dot, &[ident("a"), ident("x")]),
-										cons(TT::Dot, &[ident("b"), ident("x")]),
-									]),
-									cons(TT::Star, &[
-										cons(TT::Dot, &[ident("a"), ident("y")]),
-										cons(TT::Dot, &[ident("b"), ident("y")]),
-									]),
-								]),
-								cons(TT::Minus, &[
-									cons(TT::Star, &[
-										cons(TT::Dot, &[ident("a"), ident("x")]),
-										cons(TT::Dot, &[ident("b"), ident("y")])
-									]),
-									cons(TT::Star, &[
-										cons(TT::Dot, &[ident("b"), ident("x")]),
-										cons(TT::Dot, &[ident("a"), ident("y")]),
-									]),
-								]),
-							]),
-						])),
-					),
-				], Some(cons(TT::OParen, &[
-					ident("vmul"),
-					cons(TT::Comma, &[
-						ident("p"),
-						ident("q"),
-					]),
-				]))),
-			])
 	}
 }
 

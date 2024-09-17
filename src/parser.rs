@@ -265,28 +265,35 @@ pub(crate) enum Stmt<'a> {
 ///        | '+' expr
 ///        | '-' expr
 
-/// args := (literal (',' args)?)?
+/// args := (expr (',' expr)* ','?)?
+fn args<'a>(parser: &mut Parser<'a,'_>) -> Option<Vec<S<'a>>> {
+	let first = expr(parser, 0)
+		.ok()?;
+	let mut out = vec![first];
+	while let Some(next) = match_token(parser, TokenType::Comma)
+		.and_then(|_| expr(parser, 0))
+		.ok()
+	{
+		out.push(next);
+	}
+	let _ = match_token(parser, TokenType::Comma);
+	Some(out)
+}
 
 /// ident_or_call := ident ('(' args ')')?
 
 /// literal := ident_or_call | num
 
 fn prefix_binding_power(
-	source: &str,
-	token: Token,
+	parser: &mut Parser,
 ) -> miette::Result<((),u8)> {
 	use TokenType as TT;
 
-	match token.tt {
-		TT::Plus | TT::Minus => Ok(((),13)),
-		TT::Dollar | TT::At => Ok(((),15)),
-		TT::Bang => Ok(((),17)),
-		tt => Err(miette::miette! {
-			labels = vec![
-				LabeledSpan::at(token.range(), "here")
-			],
-			"Expected \"Unary Operator\", Found {tt:?}"
-		}.with_source_code(source.to_owned())),
+	match parser.peek(0).tt {
+		TT::Plus | TT::Minus => Ok(((),11)),
+		TT::Dollar | TT::At => Ok(((),13)),
+		TT::Bang => Ok(((),15)),
+		tt => error!(tt, parser, "Expected 'Unary Operator'"),
 	}
 }
 
@@ -294,17 +301,16 @@ fn infix_binding_power(tt: TokenType) -> Option<(u8,u8)> {
 	use TokenType as TT;
 
 	match tt {
-		TT::Comma => Some((2,1)),
-		TT::Amp2 | TT::Bar2 | TT::Carrot2 => Some((3,4)),
-		TT::Amp1 | TT::Bar1 | TT::Carrot1 => Some((5,6)),
+		TT::Amp2 | TT::Bar2 | TT::Carrot2 => Some((1,2)),
+		TT::Amp1 | TT::Bar1 | TT::Carrot1 => Some((3,4)),
 		TT::Eq2 | TT::BangEq |
 		TT::RArrow1 | TT::RArrEq |
-		TT::LArrow1 | TT::LArrEq => Some((7,8)),
-		TT::Plus | TT::Minus => Some((9,10)),
+		TT::LArrow1 | TT::LArrEq => Some((5,6)),
+		TT::Plus | TT::Minus => Some((7,8)),
 		TT::Star | TT::Slash | TT::Percent | TT::SlashPer |
-		TT::LArrow2 | TT::RArrow2 => Some((11,12)),
-		TT::Dot => Some((20,19)),
-		TT::OParen => Some((22,21)),
+		TT::LArrow2 | TT::RArrow2 => Some((9,10)),
+		TT::Dot => Some((18,17)),
+		TT::OParen => Some((20,19)),
 
 		TT::If | TT::Else |
 		TT::Fun | TT::Rec | TT::Var |
@@ -318,6 +324,7 @@ fn infix_binding_power(tt: TokenType) -> Option<(u8,u8)> {
 
 		TT::At | TT::Bang |
 		TT::Colon |
+		TT::Comma |
 		TT::CParen |
 		TT::Dollar |
 		TT::Eq1 |
@@ -351,7 +358,7 @@ fn expr<'a>(
 		TT::Dollar |
 		TT::At |
 		TT::Bang => {
-			let ((),r_bp) = prefix_binding_power(parser.source, left_token.clone())?;
+			let ((),r_bp) = prefix_binding_power(parser)?;
 			let rhs = expr(parser, r_bp)?;
 			S::Cons(left_token, vec![rhs])
 		}
@@ -384,12 +391,16 @@ fn expr<'a>(
 				continue;
 			}
 
-			let rhs = expr(parser, 0)?;
+			let Some(rhs) = args(parser) else {
+				return error!(parser.peek(0).tt, parser, "Argument List");
+			};
 			if TT::CParen != parser.peek(0).tt {
 				return error!(parser.peek(0).tt, parser, ")");
 			}
 			parser.index += 1;
-			lhs = S::Cons(op_token, vec![lhs,rhs]);
+			let mut args = vec![lhs];
+			args.extend(rhs);
+			lhs = S::Cons(op_token, args);
 			continue;
 		}
 
@@ -669,16 +680,11 @@ mod test {
 
 	#[test]
 	fn var_stmt_udt_funcall_multi() -> miette::Result<()> {
-		parse_test("var a = b(c, d, e)", &[
+		parse_test("var a = b(c, d + e)", &[
 			var("a", None, cons(TT::OParen, &[
 				ident("b"),
-				cons(TT::Comma, &[
-					ident("c"),
-					cons(TT::Comma, &[
-						ident("d"),
-						ident("e"),
-					])
-				]),
+				ident("c"),
+				cons(TT::Plus, &[ident("d"), ident("e")]),
 			]))
 		])
 	}

@@ -47,6 +47,8 @@ impl<'a> Iterator for Lexer<'a> {
 				'.' => break output(TokenType::Dot),
 				':' => break output(TokenType::Colon),
 				'@' => break output(TokenType::At),
+				'{' => break output(TokenType::OBrace),
+				'}' => break output(TokenType::CBrace),
 
 				'^' => break if let Some((j,'^')) = self.rest.char_indices().next() {
 					self.next(j+1);

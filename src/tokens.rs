@@ -12,7 +12,7 @@ pub(crate) enum TokenType<'a> {
 
 	// Keywords
 	If,    // 'if'
-	Fun,   // 'fun'
+	Fun,   // 'fn'
 	Rec,   // 'rec'
 	Var,   // 'var'
 	Else,  // 'else'
@@ -29,38 +29,40 @@ pub(crate) enum TokenType<'a> {
 	F32(&'a str), // fl[0-9]*
 
 	// Operators
-	Amp1,     // &
-	Amp2,     // &&
-	At,       // @
-	Bang,     // !
-	BangEq,   // !=
-	Bar1,     // |
-	Bar2,     // ||
-	Carrot1,  // ^
-	Carrot2,  // ^^
-	CParen,   // )
-	Colon,    // :
-	Comma,    // ,
-	Dollar,   // $
-	Dot,      // .
-	Eq1,      // =
-	Eq2,      // ==
-	LArrow1,  // <
-	LArrow2,  // <<
-	LArrBar,  // <|
-	LArrEq,   // <=
-	Minus,    // -
-	OParen,   // (
-	Percent,  // %
-	Plus,     // +
-	RArrow1,  // >
-	RArrow2,  // >>
-	RArrBar,  // |>
-	RArrEq,   // >=
-	RetArrow, // ->
-	Slash,    // /
-	SlashPer, // /%
-	Star,     // *
+	Amp1,     // '&'
+	Amp2,     // '&&'
+	At,       // '@'
+	Bang,     // '!'
+	BangEq,   // '!='
+	Bar1,     // '|'
+	Bar2,     // '||'
+	Carrot1,  // '^'
+	Carrot2,  // '^^'
+	CBrace,   // '}'
+	CParen,   // ')'
+	Colon,    // ':'
+	Comma,    // ','
+	Dollar,   // '$'
+	Dot,      // '.'
+	Eq1,      // '='
+	Eq2,      // '=='
+	LArrow1,  // '<'
+	LArrow2,  // '<<'
+	LArrBar,  // '<|'
+	LArrEq,   // '<='
+	Minus,    // '-'
+	OBrace,   // '{'
+	OParen,   // '('
+	Percent,  // '%'
+	Plus,     // '+'
+	RArrow1,  // '>'
+	RArrow2,  // '>>'
+	RArrBar,  // '|>'
+	RArrEq,   // '>='
+	RetArrow, // '->'
+	Slash,    // '/'
+	SlashPer, // '/%'
+	Star,     // '*'
 }
 
 #[derive(Clone, Eq)]
@@ -84,9 +86,9 @@ impl<'a> Token<'a> {
 			TT::EOF => 0,
 
 			TT::Amp1 | TT::At | TT::Bang | TT::Bar1 |
-			TT::Carrot1 | TT::CParen | TT::Colon | TT::Comma |
+			TT::Carrot1 | TT::CBrace | TT::CParen | TT::Colon | TT::Comma |
 			TT::Dollar | TT::Dot | TT::Eq1 | TT::LArrow1 |
-			TT::Minus | TT::OParen | TT::Percent | TT::Plus |
+			TT::Minus | TT::OBrace | TT::OParen | TT::Percent | TT::Plus |
 			TT::RArrow1 | TT::Slash | TT::Star => 1,
 
 			TT::If | TT::U8 | TT::S8 | TT::Amp2 | TT::BangEq |
@@ -148,7 +150,7 @@ impl fmt::Display for Token<'_> {
 
 impl fmt::Debug for Token<'_> {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-		write!(fmt, "{:?}", self.tt)
+		write!(fmt, "{:?}[{:?}]", self.tt, self.range())
 	}
 }
 

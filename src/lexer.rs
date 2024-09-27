@@ -165,7 +165,7 @@ impl<'a> Iterator for Lexer<'a> {
 					let ident = &self.source[c_at..self.index];
 					break output(match ident {
 						"if"    => TokenType::If,
-						"fun"   => TokenType::Fun,
+						"fn"    => TokenType::Fun,
 						"rec"   => TokenType::Rec,
 						"var"   => TokenType::Var,
 						"else"  => TokenType::Else,
@@ -280,7 +280,7 @@ mod tokenizes {
 
 	#[test]
 	fn keywords() -> miette::Result<()> {
-		lex_test("var fun rec if while else", &[
+		lex_test("var fn rec if while else", &[
 			TokenType::Var,
 			TokenType::Fun,
 			TokenType::Rec,

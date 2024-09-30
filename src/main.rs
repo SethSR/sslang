@@ -20,10 +20,13 @@ fn main() -> miette::Result<()> {
 
 	info!("lexing");
 	let tokens = lexer::eval(&file)?;
-	debug!("{}", tokens.iter().map(|t| format!("{t}")).collect::<Vec<_>>().join(" "));
+	debug!("[{}]", tokens.iter()
+		.map(|t| t.to_string())
+		.collect::<Vec<_>>()
+		.join(" "));
 	info!("parsing");
 	let ast = parser::eval(&file, tokens)?;
-	debug!("{ast:#?}");
+	debug!("{ast:?}");
 
 	Ok(())
 }

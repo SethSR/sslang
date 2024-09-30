@@ -215,6 +215,20 @@ pub(crate) enum S {
 	FnCall(String, Vec<S>, TokenInfo),
 }
 
+impl S {
+	pub(crate) fn info(&self) -> TokenInfo {
+		match self {
+			S::Num(_,info) => info,
+			S::Id(_,info) => info,
+			S::Block(_,info) => info,
+			S::If(_,_,_,info) => info,
+			S::Unary(_,_,info) => info,
+			S::Binary(_,_,_,info) => info,
+			S::FnCall(_,_,info) => info,
+		}.clone()
+	}
+}
+
 impl PartialEq for S {
 	fn eq(&self, rhs: &Self) -> bool {
 		match (self, rhs) {

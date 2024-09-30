@@ -122,16 +122,48 @@ fn collapse_binop(
 	s1: S,
 	info: Range<usize>,
 ) -> S {
-	match (&s0, &s1) {
-		(S::Num(n0,i0), S::Num(n1,i1)) => S::Num(f(*n0,*n1), i0.start..i1.end),
-		_ => S::Binary(op, Box::new(s0), Box::new(s1), info),
+	match (s0, s1) {
+		(S::Num(n0,i0), S::Num(n1,i1)) => S::Num(f(n0,n1), i0.start..i1.end),
+		(s_0,s_1) => S::Binary(op, Box::new(s_0), Box::new(s_1), info),
 	}
 }
 
 fn binary(op: BinaryOp, s0: S, s1: S, info: Range<usize>) -> S {
 	match op {
-		BinaryOp::Add =>
-			collapse_binop(|n0,n1| n0 + n1, op, s0, s1, info),
+		BinaryOp::Add => match (s0, s1) {
+			(S::Num(n0,i0), S::Num(n1,i1)) => S::Num(n0 + n1, i0.start..i1.end),
+			(s_0, S::Num(n1,i1)) => if let S::Binary(BinaryOp::Add, s00, s01, i0) = s_0 {
+				// ((s00 + s01) + s1)
+				match (*s00, *s01) {
+					(S::Num(n00,i00), s_01) => S::Binary(
+						BinaryOp::Add,
+						Box::new(s_01),
+						Box::new(S::Num(n00 + n1, i00.start..i1.end)),
+						info,
+					),
+					(s_00, S::Num(n01,i01)) => S::Binary(
+						BinaryOp::Add,
+						Box::new(s_00),
+						Box::new(S::Num(n01 + n1, i01.start..i1.end)),
+						info,
+					),
+					(s_00, s_01) => S::Binary(
+						BinaryOp::Add,
+						Box::new(S::Binary(BinaryOp::Add, Box::new(s_00), Box::new(s_01), i0)),
+						Box::new(S::Num(n1,i1)),
+						info,
+					),
+				}
+			} else {
+				S::Binary(
+					BinaryOp::Add,
+					Box::new(s_0),
+					Box::new(S::Num(n1,i1)),
+					info,
+				)
+			}
+			(s_0, s_1) => S::Binary(op, Box::new(s_0), Box::new(s_1), info),
+		}
 		BinaryOp::AndB =>
 			collapse_binop(|n0,n1| n0 & n1, op, s0, s1, info),
 		BinaryOp::AndL =>
@@ -162,8 +194,24 @@ fn binary(op: BinaryOp, s0: S, s1: S, info: Range<usize>) -> S {
 			collapse_binop(|n0,n1| (n0 != 0 || n1 != 0) as i64, op, s0, s1, info),
 		BinaryOp::RShift =>
 			collapse_binop(|n0,n1| n0 >> n1, op, s0, s1, info),
-		BinaryOp::Sub =>
-			collapse_binop(|n0,n1| n0 - n1, op, s0, s1, info),
+		BinaryOp::Sub => match (s0, s1) {
+			(S::Num(n0,i0), S::Num(n1,i1)) => S::Num(n0 - n1, i0.start..i1.end),
+			(s_0, S::Num(n1,i1)) => S::Binary(
+				BinaryOp::Add,
+				Box::new(s_0),
+				Box::new(S::Num(-n1,i1)),
+				info,
+			),
+			(s_0, s_1) => {
+				let i1 = s_1.info();
+				S::Binary(
+					BinaryOp::Add,
+					Box::new(s_0),
+					Box::new(S::Unary(UnaryOp::Neg, Box::new(s_1), i1)),
+					info,
+				)
+			}
+		}
 		BinaryOp::XorB =>
 			collapse_binop(|n0,n1| n0 ^ n1, op, s0, s1, info),
 		BinaryOp::XorL =>
@@ -181,7 +229,7 @@ fn binary(op: BinaryOp, s0: S, s1: S, info: Range<usize>) -> S {
 #[cfg(test)]
 mod collapses {
 	use crate::{lexer, parser, reducer};
-	use parser::{S, Stmt};
+	use parser::{BinaryOp, S, Stmt, UnaryOp};
 
 	#[test]
 	fn numeric_literal_expressions() {
@@ -196,6 +244,76 @@ mod collapses {
 				name: "a".to_string(),
 				vtype: None,
 				body: S::Num(13, 0..0),
+			}
+		]);
+	}
+
+	#[test]
+	fn numeric_literals_separated_by_identifier_with_same_op() {
+		let input = "var a = 3 + b + 1";
+		let tokens = lexer::eval(input)
+			.expect("valid token list");
+		let ast = parser::eval(input, tokens)
+			.expect("valid AST");
+		let ast = reducer::eval(ast);
+		assert_eq!(ast, vec![
+			Stmt::Var {
+				name: "a".to_string(),
+				vtype: None,
+				body: S::Binary(
+					BinaryOp::Add,
+					Box::new(S::Id("b".to_string(), 0..0)),
+					Box::new(S::Num(4, 0..0)),
+					0..0,
+				),
+			}
+		]);
+	}
+
+	#[test]
+	fn numeric_literals_separated_by_identifier_with_diff_op1() {
+		let input = "var a = 3 + b - 1";
+		let tokens = lexer::eval(input)
+			.expect("valid token list");
+		let ast = parser::eval(input, tokens)
+			.expect("valid AST");
+		let ast = reducer::eval(ast);
+		assert_eq!(ast, vec![
+			Stmt::Var {
+				name: "a".to_string(),
+				vtype: None,
+				body: S::Binary(
+					BinaryOp::Add,
+					Box::new(S::Id("b".to_string(), 0..0)),
+					Box::new(S::Num(2, 0..0)),
+					0..0,
+				),
+			}
+		]);
+	}
+
+	#[test]
+	fn numeric_literals_separated_by_identifier_with_diff_op2() {
+		let input = "var a = 3 - b + 1";
+		let tokens = lexer::eval(input)
+			.expect("valid token list");
+		let ast = parser::eval(input, tokens)
+			.expect("valid AST");
+		let ast = reducer::eval(ast);
+		assert_eq!(ast, vec![
+			Stmt::Var {
+				name: "a".to_string(),
+				vtype: None,
+				body: S::Binary(
+					BinaryOp::Add,
+					Box::new(S::Unary(
+						UnaryOp::Neg,
+						Box::new(S::Id("b".to_string(), 0..0)),
+						0..0,
+					)),
+					Box::new(S::Num(4, 0..0)),
+					0..0,
+				),
 			}
 		]);
 	}

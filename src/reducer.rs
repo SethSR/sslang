@@ -63,16 +63,16 @@ fn expr(s: S) -> S {
 	match s {
 		S::Num(n, info) => S::Num(n, info),
 		S::Id(s, info) => S::Id(s, info),
-		S::Block(b,info) => S::Block(Box::new(block(*b)), info),
-		S::If(cond, bt, Some(bf), info) => S::If(
-			Box::new(expr(*cond)),
-			Box::new(block(*bt)),
-			Some(Box::new(block(*bf))),
+		S::Block(b,info) => S::new_block(block(*b), info),
+		S::If(cond, bt, Some(bf), info) => S::new_if(
+			expr(*cond),
+			block(*bt),
+			Some(block(*bf)),
 			info,
 		),
-		S::If(cond, bt, None, info) => S::If(
-			Box::new(expr(*cond)),
-			Box::new(block(*bt)),
+		S::If(cond, bt, None, info) => S::new_if(
+			expr(*cond),
+			block(*bt),
 			None,
 			info,
 		),
@@ -102,16 +102,16 @@ fn unary(op: UnaryOp, s: S, info: Range<usize>) -> S {
 		UnaryOp::Neg => if let S::Num(n, info) = s {
 			S::Num(-n, info.start-1..info.end)
 		} else {
-			S::Unary(op, Box::new(s), info)
+			S::new_unary(op, s, info)
 		}
 		UnaryOp::Not => if let S::Num(n, info) = s {
 			S::Num(!n, info.start-1..info.end)
 		} else {
-			S::Unary(op, Box::new(s), info)
+			S::new_unary(op, s, info)
 		}
 		UnaryOp::Pos => s,
 		UnaryOp::Deref |
-		UnaryOp::Ref => S::Unary(op, Box::new(s), info),
+		UnaryOp::Ref => S::new_unary(op, s, info),
 	}
 }
 
@@ -124,7 +124,7 @@ fn collapse_binop(
 ) -> S {
 	match (s0, s1) {
 		(S::Num(n0,i0), S::Num(n1,i1)) => S::Num(f(n0,n1), i0.start..i1.end),
-		(s_0,s_1) => S::Binary(op, Box::new(s_0), Box::new(s_1), info),
+		(s_0,s_1) => S::new_binary(op, s_0, s_1, info),
 	}
 }
 
@@ -135,34 +135,29 @@ fn binary(op: BinaryOp, s0: S, s1: S, info: Range<usize>) -> S {
 			(s_0, S::Num(n1,i1)) => if let S::Binary(BinaryOp::Add, s00, s01, i0) = s_0 {
 				// ((s00 + s01) + s1)
 				match (*s00, *s01) {
-					(S::Num(n00,i00), s_01) => S::Binary(
+					(S::Num(n00,i00), s_01) => S::new_binary(
 						BinaryOp::Add,
-						Box::new(s_01),
-						Box::new(S::Num(n00 + n1, i00.start..i1.end)),
+						s_01,
+						S::Num(n00 + n1, i00.start..i1.end),
 						info,
 					),
-					(s_00, S::Num(n01,i01)) => S::Binary(
+					(s_00, S::Num(n01,i01)) => S::new_binary(
 						BinaryOp::Add,
-						Box::new(s_00),
-						Box::new(S::Num(n01 + n1, i01.start..i1.end)),
+						s_00,
+						S::Num(n01 + n1, i01.start..i1.end),
 						info,
 					),
-					(s_00, s_01) => S::Binary(
+					(s_00, s_01) => S::new_binary(
 						BinaryOp::Add,
-						Box::new(S::Binary(BinaryOp::Add, Box::new(s_00), Box::new(s_01), i0)),
-						Box::new(S::Num(n1,i1)),
+						S::new_binary(BinaryOp::Add, s_00, s_01, i0),
+						S::Num(n1,i1),
 						info,
 					),
 				}
 			} else {
-				S::Binary(
-					BinaryOp::Add,
-					Box::new(s_0),
-					Box::new(S::Num(n1,i1)),
-					info,
-				)
+				S::new_binary(BinaryOp::Add, s_0, S::Num(n1,i1), info)
 			}
-			(s_0, s_1) => S::Binary(op, Box::new(s_0), Box::new(s_1), info),
+			(s_0, s_1) => S::new_binary(op, s_0, s_1, info),
 		}
 		BinaryOp::AndB =>
 			collapse_binop(|n0,n1| n0 & n1, op, s0, s1, info),
@@ -196,18 +191,18 @@ fn binary(op: BinaryOp, s0: S, s1: S, info: Range<usize>) -> S {
 			collapse_binop(|n0,n1| n0 >> n1, op, s0, s1, info),
 		BinaryOp::Sub => match (s0, s1) {
 			(S::Num(n0,i0), S::Num(n1,i1)) => S::Num(n0 - n1, i0.start..i1.end),
-			(s_0, S::Num(n1,i1)) => S::Binary(
+			(s_0, S::Num(n1,i1)) => S::new_binary(
 				BinaryOp::Add,
-				Box::new(s_0),
-				Box::new(S::Num(-n1,i1)),
+				s_0,
+				S::Num(-n1,i1),
 				info,
 			),
 			(s_0, s_1) => {
 				let i1 = s_1.info();
-				S::Binary(
+				S::new_binary(
 					BinaryOp::Add,
-					Box::new(s_0),
-					Box::new(S::Unary(UnaryOp::Neg, Box::new(s_1), i1)),
+					s_0,
+					S::new_unary(UnaryOp::Neg, s_1, i1),
 					info,
 				)
 			}
@@ -222,7 +217,7 @@ fn binary(op: BinaryOp, s0: S, s1: S, info: Range<usize>) -> S {
 		BinaryOp::Comma |
 		BinaryOp::DivMod |
 		BinaryOp::LFShift |
-		BinaryOp::RFShift => S::Binary(op, Box::new(s0), Box::new(s1), info),
+		BinaryOp::RFShift => S::new_binary(op, s0, s1, info),
 	}
 }
 
@@ -260,10 +255,10 @@ mod collapses {
 			Stmt::Var {
 				name: "a".to_string(),
 				vtype: None,
-				body: S::Binary(
+				body: S::new_binary(
 					BinaryOp::Add,
-					Box::new(S::Id("b".to_string(), 0..0)),
-					Box::new(S::Num(4, 0..0)),
+					S::Id("b".to_string(), 0..0),
+					S::Num(4, 0..0),
 					0..0,
 				),
 			}
@@ -282,10 +277,10 @@ mod collapses {
 			Stmt::Var {
 				name: "a".to_string(),
 				vtype: None,
-				body: S::Binary(
+				body: S::new_binary(
 					BinaryOp::Add,
-					Box::new(S::Id("b".to_string(), 0..0)),
-					Box::new(S::Num(2, 0..0)),
+					S::Id("b".to_string(), 0..0),
+					S::Num(2, 0..0),
 					0..0,
 				),
 			}
@@ -304,14 +299,10 @@ mod collapses {
 			Stmt::Var {
 				name: "a".to_string(),
 				vtype: None,
-				body: S::Binary(
+				body: S::new_binary(
 					BinaryOp::Add,
-					Box::new(S::Unary(
-						UnaryOp::Neg,
-						Box::new(S::Id("b".to_string(), 0..0)),
-						0..0,
-					)),
-					Box::new(S::Num(4, 0..0)),
+					S::new_unary(UnaryOp::Neg, S::Id("b".to_string(), 0..0), 0..0),
+					S::Num(4, 0..0),
 					0..0,
 				),
 			}

@@ -216,6 +216,22 @@ pub(crate) enum S {
 }
 
 impl S {
+	pub(crate) fn new_block(b: Block, t: TokenInfo) -> Self {
+		S::Block(Box::new(b), t)
+	}
+
+	pub(crate) fn new_if(cond: S, bt: Block, bf: Option<Block>, t: TokenInfo) -> Self {
+		S::If(Box::new(cond), Box::new(bt), bf.map(Box::new), t)
+	}
+
+	pub(crate) fn new_unary(op: UnaryOp, s: S, t: TokenInfo) -> Self {
+		S::Unary(op, Box::new(s), t)
+	}
+
+	pub(crate) fn new_binary(op: BinaryOp, s0: S, s1: S, t: TokenInfo) -> Self {
+		S::Binary(op, Box::new(s0), Box::new(s1), t)
+	}
+
 	pub(crate) fn info(&self) -> TokenInfo {
 		match self {
 			S::Num(_,info) => info,
@@ -655,7 +671,7 @@ fn expr<'a>(
 			let start = left_token.range().start;
 			let (cond, bt, bf) = expr_if(parser)?;
 			let end = parser.peek(-1).range().end;
-			S::If(Box::new(cond), Box::new(bt), bf.map(Box::new), start..end)
+			S::new_if(cond, bt, bf, start..end)
 		}
 
 		TT::OParen => {
@@ -676,7 +692,7 @@ fn expr<'a>(
 			let ((),r_bp) = prefix_binding_power(parser)?;
 			parser.index += 1;
 			let rhs = expr(parser, r_bp)?;
-			S::Unary(left_token.tt.try_into()?, Box::new(rhs), left_token.range())
+			S::new_unary(left_token.tt.try_into()?, rhs, left_token.range())
 		}
 		TT::EOF => return error!(eof, parser,
 			"Identifier, Function Call, or Literal"),
@@ -728,12 +744,9 @@ fn expr<'a>(
 			}
 
 			parser.index += 1;
-			lhs = S::Binary(
-				op_token.tt.try_into()?,
-				Box::new(lhs),
-				Box::new(expr(parser, r_bp)?),
-				op_token.range(),
-			);
+			let op: BinaryOp = op_token.tt.try_into()?;
+			let rhs = expr(parser, r_bp)?;
+			lhs = S::new_binary(op, lhs, rhs, op_token.range());
 			continue;
 		}
 
@@ -816,7 +829,7 @@ fn stmt_var<'a>(
 	match_token(parser, TokenType::Eq1)?;
 	let start = parser.peek(0).range().start;
 	let body = block(parser)
-		.map(|b| S::Block(Box::new(b), start..parser.peek(-1).range().end))
+		.map(|b| S::new_block(b, start..parser.peek(-1).range().end))
 		.or_else(|_| expr(parser, 0))?;
 	Ok(Stmt::Var { name, vtype, body })
 }
@@ -867,7 +880,7 @@ fn stmt_assign<'a>(
 	parser.index += 1;
 	let start = parser.peek(0).range().start;
 	let body = block(parser)
-		.map(|b| S::Block(Box::new(b), start..parser.peek(-1).range().end))
+		.map(|b| S::new_block(b, start..parser.peek(-1).range().end))
 		.or_else(|_| expr(parser, 0))?;
 	Ok(Stmt::Assign { referent, body })
 }
@@ -919,11 +932,11 @@ mod test {
 	}
 
 	fn unary(op: UnaryOp, s: S) -> S {
-		S::Unary(op, Box::new(s), 0..0)
+		S::new_unary(op, s, 0..0)
 	}
 
 	fn binary(op: BinaryOp, s0: S, s1: S) -> S {
-		S::Binary(op, Box::new(s0), Box::new(s1), 0..0)
+		S::new_binary(op, s0, s1, 0..0)
 	}
 
 	fn fn_call(name: &str, s: &[S]) -> S {

@@ -5,6 +5,7 @@ use tracing::{info,debug};
 mod tokens;
 mod lexer;
 mod parser;
+mod reducer;
 
 fn main() -> miette::Result<()> {
 	tracing_subscriber::fmt::init();
@@ -26,6 +27,9 @@ fn main() -> miette::Result<()> {
 		.join(" "));
 	info!("parsing");
 	let ast = parser::eval(&file, tokens)?;
+	debug!("{ast:?}");
+	info!("reducer");
+	let ast = reducer::eval(ast);
 	debug!("{ast:?}");
 
 	Ok(())

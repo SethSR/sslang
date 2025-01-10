@@ -376,15 +376,13 @@ pub fn eval(
 }
 
 #[derive(Debug)]
-struct Parser<'a,'b>
-where 'a: 'b
-{
-	input: &'b [Token],
-	source: &'a str,
+struct Parser<'a,'b> {
+	input: &'a [Token],
+	source: &'b str,
 	index: usize,
 }
 
-impl<'a,'b> Parser<'a,'b> {
+impl Parser<'_,'_> {
 	fn peek(&self, offset: isize) -> &Token {
 		&self.input[self.index.saturating_add_signed(offset)]
 	}

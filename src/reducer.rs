@@ -236,7 +236,7 @@ mod collapses {
 		let ast = reducer::eval(ast);
 		assert_eq!(ast, vec![
 			Stmt::Var {
-				name: "a".to_string(),
+				name: "a".into(),
 				vtype: None,
 				body: S::Num(13, 0..0),
 			}
@@ -253,11 +253,11 @@ mod collapses {
 		let ast = reducer::eval(ast);
 		assert_eq!(ast, vec![
 			Stmt::Var {
-				name: "a".to_string(),
+				name: "a".into(),
 				vtype: None,
 				body: S::new_binary(
 					BinaryOp::Add,
-					S::Id("b".to_string(), 0..0),
+					S::Id("b".into(), 0..0),
 					S::Num(4, 0..0),
 					0..0,
 				),
@@ -275,11 +275,11 @@ mod collapses {
 		let ast = reducer::eval(ast);
 		assert_eq!(ast, vec![
 			Stmt::Var {
-				name: "a".to_string(),
+				name: "a".into(),
 				vtype: None,
 				body: S::new_binary(
 					BinaryOp::Add,
-					S::Id("b".to_string(), 0..0),
+					S::Id("b".into(), 0..0),
 					S::Num(2, 0..0),
 					0..0,
 				),
@@ -297,11 +297,11 @@ mod collapses {
 		let ast = reducer::eval(ast);
 		assert_eq!(ast, vec![
 			Stmt::Var {
-				name: "a".to_string(),
+				name: "a".into(),
 				vtype: None,
 				body: S::new_binary(
 					BinaryOp::Add,
-					S::new_unary(UnaryOp::Neg, S::Id("b".to_string(), 0..0), 0..0),
+					S::new_unary(UnaryOp::Neg, S::Id("b".into(), 0..0), 0..0),
 					S::Num(4, 0..0),
 					0..0,
 				),

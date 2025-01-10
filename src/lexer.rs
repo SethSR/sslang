@@ -25,7 +25,7 @@ impl<'a> Lexer<'a> {
 }
 
 impl<'a> Iterator for Lexer<'a> {
-	type Item = Result<Token<'a>, miette::Error>;
+	type Item = Result<Token, miette::Error>;
 
 	fn next(&mut self) -> Option<Self::Item> {
 		loop {
@@ -177,11 +177,11 @@ impl<'a> Iterator for Lexer<'a> {
 						"s16"   => TokenType::S16,
 						"s32"   => TokenType::S32,
 						s => if ident.starts_with("fw") {
-							TokenType::F16(s)
+							TokenType::F16(s.into())
 						} else if ident.starts_with("fl") {
-							TokenType::F32(s)
+							TokenType::F32(s.into())
 						} else {
-							TokenType::Ident(s)
+							TokenType::Ident(s.into())
 						}
 					});
 				}
@@ -206,7 +206,7 @@ impl<'a> Iterator for Lexer<'a> {
 						break self.next(index);
 					}
 					let s = &self.source[c_at..self.index];
-					break output(TokenType::Number(s));
+					break output(TokenType::Number(s.into()));
 				}
 
 				w if w.is_whitespace() => {
@@ -299,28 +299,28 @@ mod tokenizes {
 			TokenType::S8,
 			TokenType::S16,
 			TokenType::S32,
-			TokenType::F16("fw"),
-			TokenType::F16("fw4"),
-			TokenType::F32("fl"),
-			TokenType::F32("fl22"),
+			TokenType::F16("fw".into()),
+			TokenType::F16("fw4".into()),
+			TokenType::F32("fl".into()),
+			TokenType::F32("fl22".into()),
 		])
 	}
 
 	#[test]
 	fn identifiers() -> miette::Result<()> {
 		lex_test("abc_123 _123", &[
-			TokenType::Ident("abc_123"),
-			TokenType::Ident("_123"),
+			TokenType::Ident("abc_123".into()),
+			TokenType::Ident("_123".into()),
 		])
 	}
 
 	#[test]
 	fn numbers() -> miette::Result<()> {
 		lex_test("1 2.34 5_6 7_8.9", &[
-			TokenType::Number("1"),
-			TokenType::Number("2.34"),
-			TokenType::Number("5_6"),
-			TokenType::Number("7_8.9"),
+			TokenType::Number("1".into()),
+			TokenType::Number("2.34".into()),
+			TokenType::Number("5_6".into()),
+			TokenType::Number("7_8.9".into()),
 		])
 	}
 }

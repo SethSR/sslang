@@ -1,14 +1,15 @@
 
-use std::ops::Range;
 use std::cmp::PartialEq;
+use std::ops::Range;
+use std::rc::Rc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TokenType<'a> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TokenType {
 	EOF,
 
 	// Literals
-	Ident(&'a str),  // [a-zA-Z_][a-zA-Z0-9_]*
-	Number(&'a str), // [0-9_]+\.?[0-9_]*
+	Ident(Rc<str>),  // [a-zA-Z_][a-zA-Z0-9_]*
+	Number(Rc<str>), // [0-9_]+\.?[0-9_]*
 
 	// Keywords
 	If,    // 'if'
@@ -25,8 +26,8 @@ pub(crate) enum TokenType<'a> {
 	S8,  // s8
 	S16, // s16
 	S32, // s32
-	F16(&'a str), // fw[0-9]*
-	F32(&'a str), // fl[0-9]*
+	F16(Rc<str>), // fw[0-9]*
+	F32(Rc<str>), // fl[0-9]*
 
 	// Operators
 	Amp1,     // '&'
@@ -66,23 +67,23 @@ pub(crate) enum TokenType<'a> {
 }
 
 #[derive(Clone, Eq)]
-pub(crate) struct Token<'a> {
-	pub(crate) tt: TokenType<'a>,
+pub(crate) struct Token {
+	pub(crate) tt: TokenType,
 	pub(crate) start: u16,
 }
 
-impl<'a> Token<'a> {
+impl Token {
 	pub(crate) fn new(
-		tt: TokenType<'a>,
+		tt: TokenType,
 		start: usize,
-	) -> Token<'a> {
+	) -> Token {
 		Self { tt, start: start as u16 }
 	}
 
 	pub(crate) fn range(&self) -> Range<usize> {
 		use TokenType as TT;
 
-		let end = match self.tt {
+		let end = match &self.tt {
 			TT::EOF => 0,
 
 			TT::Amp1 | TT::At | TT::Bang | TT::Bar1 |
@@ -112,9 +113,9 @@ impl<'a> Token<'a> {
 	}
 }
 
-impl PartialEq for Token<'_> {
+impl PartialEq for Token {
 	fn eq(&self, rhs: &Self) -> bool {
-		match (self.tt, rhs.tt) {
+		match (&self.tt, &rhs.tt) {
 			(TokenType::Ident(a), TokenType::Ident(b)) |
 			(TokenType::Number(a), TokenType::Number(b)) => a == b,
 			_ => self.tt == rhs.tt,
@@ -122,13 +123,13 @@ impl PartialEq for Token<'_> {
 	}
 }
 
-impl PartialEq<TokenType<'_>> for Token<'_> {
+impl PartialEq<TokenType> for Token {
 	fn eq(&self, rhs: &TokenType) -> bool {
 		self.tt == *rhs
 	}
 }
 
-impl PartialEq<&TokenType<'_>> for Token<'_> {
+impl PartialEq<&TokenType> for Token {
 	fn eq(&self, rhs: &&TokenType) -> bool {
 		self.tt == **rhs
 	}
@@ -136,11 +137,11 @@ impl PartialEq<&TokenType<'_>> for Token<'_> {
 
 use std::fmt;
 
-impl fmt::Display for Token<'_> {
+impl fmt::Display for Token {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
 		use TokenType as TT;
 
-		match self.tt {
+		match &self.tt {
 			TT::Ident(s) | TT::Number(s) |
 			TT::F16(s) | TT::F32(s) => write!(fmt, "{s}"),
 			tt => write!(fmt, "{tt:?}"),
@@ -148,7 +149,7 @@ impl fmt::Display for Token<'_> {
 	}
 }
 
-impl fmt::Debug for Token<'_> {
+impl fmt::Debug for Token {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
 		write!(fmt, "{:?}[{:?}]", self.tt, self.range())
 	}

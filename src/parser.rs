@@ -1,13 +1,14 @@
 
 use std::fmt;
 use std::ops::Range;
+use std::rc::Rc;
 
 use miette::{IntoDiagnostic, LabeledSpan, WrapErr};
 use tracing::{instrument, trace};
 
 use crate::tokens::{Token, TokenType};
 
-pub(crate) type TypedIdent = (String, ValueType);
+pub(crate) type TypedIdent = (Rc<str>, ValueType);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ValueType {
@@ -52,9 +53,25 @@ pub(crate) enum UnaryOp {
 	Ref,
 }
 
-impl TryFrom<TokenType<'_>> for UnaryOp {
+impl TryFrom<TokenType> for UnaryOp {
 	type Error = miette::Report;
 	fn try_from(tt: TokenType) -> Result<Self, Self::Error> {
+		match tt {
+			TokenType::At       => Ok(UnaryOp::Deref),
+			TokenType::Bang     => Ok(UnaryOp::Not),
+			TokenType::Dollar   => Ok(UnaryOp::Ref),
+			TokenType::Minus    => Ok(UnaryOp::Neg),
+			TokenType::Plus     => Ok(UnaryOp::Pos),
+			_ => Err(miette::miette! {
+				"{tt:?} is not a unary operator"
+			})
+		}
+	}
+}
+
+impl TryFrom<&TokenType> for UnaryOp {
+	type Error = miette::Report;
+	fn try_from(tt: &TokenType) -> Result<Self, Self::Error> {
 		match tt {
 			TokenType::At       => Ok(UnaryOp::Deref),
 			TokenType::Bang     => Ok(UnaryOp::Not),
@@ -135,9 +152,45 @@ pub(crate) enum BinaryOp {
 	XorL,
 }
 
-impl TryFrom<TokenType<'_>> for BinaryOp {
+impl TryFrom<TokenType> for BinaryOp {
 	type Error = miette::Report;
 	fn try_from(tt: TokenType) -> Result<Self, Self::Error> {
+		match tt {
+			TokenType::Amp1     => Ok(BinaryOp::AndB),
+			TokenType::Amp2     => Ok(BinaryOp::AndL),
+			TokenType::BangEq   => Ok(BinaryOp::CmpNE),
+			TokenType::Bar1     => Ok(BinaryOp::OrB),
+			TokenType::Bar2     => Ok(BinaryOp::OrL),
+			TokenType::Carrot1  => Ok(BinaryOp::XorB),
+			TokenType::Carrot2  => Ok(BinaryOp::XorL),
+			TokenType::Comma    => Ok(BinaryOp::Comma),
+			TokenType::Dot      => Ok(BinaryOp::Accessor),
+			TokenType::Eq1      => Ok(BinaryOp::Assign),
+			TokenType::Eq2      => Ok(BinaryOp::CmpEq),
+			TokenType::LArrow1  => Ok(BinaryOp::CmpLT),
+			TokenType::LArrow2  => Ok(BinaryOp::LShift),
+			TokenType::LArrBar  => Ok(BinaryOp::LFShift),
+			TokenType::LArrEq   => Ok(BinaryOp::CmpLE),
+			TokenType::Minus    => Ok(BinaryOp::Sub),
+			TokenType::Percent  => Ok(BinaryOp::Mod),
+			TokenType::Plus     => Ok(BinaryOp::Add),
+			TokenType::RArrow1  => Ok(BinaryOp::CmpGT),
+			TokenType::RArrow2  => Ok(BinaryOp::RShift),
+			TokenType::RArrBar  => Ok(BinaryOp::RFShift),
+			TokenType::RArrEq   => Ok(BinaryOp::CmpGE),
+			TokenType::Slash    => Ok(BinaryOp::Div),
+			TokenType::SlashPer => Ok(BinaryOp::DivMod),
+			TokenType::Star     => Ok(BinaryOp::Mul),
+			_ => Err(miette::miette! {
+				"{tt:?} is not an operator"
+			})
+		}
+	}
+}
+
+impl TryFrom<&TokenType> for BinaryOp {
+	type Error = miette::Report;
+	fn try_from(tt: &TokenType) -> Result<Self, Self::Error> {
 		match tt {
 			TokenType::Amp1     => Ok(BinaryOp::AndB),
 			TokenType::Amp2     => Ok(BinaryOp::AndL),
@@ -207,12 +260,12 @@ impl fmt::Display for BinaryOp {
 #[derive(Clone)]
 pub(crate) enum S {
 	Num(i64, TokenInfo),
-	Id(String, TokenInfo),
+	Id(Rc<str>, TokenInfo),
 	Block(Box<Block>, TokenInfo),
 	If(Box<S>, Box<Block>, Option<Box<Block>>, TokenInfo),
 	Unary(UnaryOp, Box<S>, TokenInfo),
 	Binary(BinaryOp, Box<S>, Box<S>, TokenInfo),
-	FnCall(String, Vec<S>, TokenInfo),
+	FnCall(Rc<str>, Vec<S>, TokenInfo),
 }
 
 impl S {
@@ -305,9 +358,9 @@ impl fmt::Display for S {
 	}
 }
 
-pub fn eval<'a>(
-	source: &'a str,
-	input: Vec<Token<'a>>,
+pub fn eval(
+	source: &str,
+	input: Vec<Token>,
 ) -> miette::Result<Vec<Stmt>> {
 	if input.len() == 0 {
 		miette::bail!("Empty input");
@@ -326,13 +379,13 @@ pub fn eval<'a>(
 struct Parser<'a,'b>
 where 'a: 'b
 {
-	input: &'b [Token<'a>],
+	input: &'b [Token],
 	source: &'a str,
 	index: usize,
 }
 
 impl<'a,'b> Parser<'a,'b> {
-	fn peek(&self, offset: isize) -> &Token<'a> {
+	fn peek(&self, offset: isize) -> &Token {
 		&self.input[self.index.saturating_add_signed(offset)]
 	}
 }
@@ -374,7 +427,7 @@ macro_rules! error {
 fn num(
 	parser: &mut Parser,
 ) -> miette::Result<u64> {
-	match parser.peek(0).tt {
+	match parser.peek(0).tt.clone() {
 		TokenType::Number(s) => {
 			parser.index += 1;
 			Ok(float_to_fixed(s
@@ -405,12 +458,12 @@ fn convert_float_to_fixed() {
 
 fn ident(
 	parser: &mut Parser,
-) -> miette::Result<String> {
-	match parser.peek(0).tt {
+) -> miette::Result<Rc<str>> {
+	match parser.peek(0).tt.clone() {
 		TokenType::Ident(s) => {
 			trace!("{}", parser.peek(0));
 			parser.index += 1;
-			Ok(s.to_string())
+			Ok(s)
 		}
 		TokenType::EOF => error!(eof, parser, "Identifier"),
 		_ => error!(parser, "Identifier"),
@@ -474,7 +527,7 @@ fn match_token(
 	parser: &mut Parser,
 	tt: TokenType,
 ) -> miette::Result<()> {
-	match parser.peek(0).tt {
+	match parser.peek(0).tt.clone() {
 		t if t != tt => if t == TokenType::EOF {
 			error!(parser, tt)
 		} else {
@@ -528,17 +581,17 @@ impl Block {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Stmt {
 	Rec {
-		name: String,
+		name: Rc<str>,
 		fields: Vec<TypedIdent>,
 	},
 	Fun {
-		name: String,
+		name: Rc<str>,
 		params: Vec<TypedIdent>,
 		rtype: Option<ValueType>,
 		body: Block,
 	},
 	Var {
-		name: String,
+		name: Rc<str>,
 		vtype: Option<ValueType>,
 		body: S,
 	},
@@ -552,7 +605,7 @@ pub(crate) enum Stmt {
 		body: Block,
 	},
 	Assign {
-		referent: String,
+		referent: Rc<str>,
 		body: S,
 	}
 }
@@ -611,7 +664,7 @@ fn prefix_binding_power(
 }
 
 #[instrument]
-fn infix_binding_power(tt: TokenType) -> Option<(u8,u8)> {
+fn infix_binding_power(tt: &TokenType) -> Option<(u8,u8)> {
 	use TokenType as TT;
 
 	match tt {
@@ -657,11 +710,11 @@ fn expr<'a>(
 
 	let left_token = parser.peek(0).clone();
 	let mut lhs = match left_token.tt {
-		TT::Ident(s) => {
+		TT::Ident(ref s) => {
 			parser.index += 1;
 			S::Id(s.to_owned(), left_token.range())
 		}
-		TT::Number(n) => {
+		TT::Number(ref n) => {
 			parser.index += 1;
 			S::Num(n.parse::<i64>().into_diagnostic()?, left_token.range())
 		}
@@ -692,7 +745,7 @@ fn expr<'a>(
 			let ((),r_bp) = prefix_binding_power(parser)?;
 			parser.index += 1;
 			let rhs = expr(parser, r_bp)?;
-			S::new_unary(left_token.tt.try_into()?, rhs, left_token.range())
+			S::new_unary((&left_token.tt).try_into()?, rhs, left_token.range())
 		}
 		TT::EOF => return error!(eof, parser,
 			"Identifier, Function Call, or Literal"),
@@ -738,13 +791,13 @@ fn expr<'a>(
 			continue;
 		}
 
-		if let Some((l_bp,r_bp)) = infix_binding_power(op_token.tt) {
+		if let Some((l_bp,r_bp)) = infix_binding_power(&op_token.tt) {
 			if l_bp < min_bp {
 				break;
 			}
 
 			parser.index += 1;
-			let op: BinaryOp = op_token.tt.try_into()?;
+			let op: BinaryOp = (&op_token.tt).try_into()?;
 			let rhs = expr(parser, r_bp)?;
 			lhs = S::new_binary(op, lhs, rhs, op_token.range());
 			continue;
@@ -928,7 +981,7 @@ mod test {
 	}
 
 	fn ident(s: &str) -> S {
-		S::Id(s.to_owned(), 0..0)
+		S::Id(s.into(), 0..0)
 	}
 
 	fn unary(op: UnaryOp, s: S) -> S {
@@ -940,7 +993,7 @@ mod test {
 	}
 
 	fn fn_call(name: &str, s: &[S]) -> S {
-		S::FnCall(name.to_string(), s.to_vec(), 0..0)
+		S::FnCall(name.into(), s.to_vec(), 0..0)
 	}
 
 	fn expr_test(input: &str, s: S) -> miette::Result<()> {
@@ -962,7 +1015,7 @@ mod test {
 		body: S,
 	) -> Stmt {
 		Stmt::Var {
-			name: name.to_string(),
+			name: name.into(),
 			vtype,
 			body,
 		}
@@ -976,7 +1029,7 @@ mod test {
 		output: Option<S>,
 	) -> Stmt {
 		Stmt::Fun {
-			name: name.to_string(),
+			name: name.into(),
 			params: params.to_vec(),
 			rtype,
 			body: Block::new(body.to_vec(),	output),
@@ -988,7 +1041,7 @@ mod test {
 		fields: &[TypedIdent],
 	) -> Stmt {
 		Stmt::Rec {
-			name: name.to_string(),
+			name: name.into(),
 			fields: fields.to_vec(),
 		}
 	}
@@ -1013,7 +1066,7 @@ mod test {
 		body: S,
 	) -> Stmt {
 		Stmt::Assign {
-			referent: referent.to_string(),
+			referent: referent.into(),
 			body,
 		}
 	}
@@ -1149,10 +1202,10 @@ mod test {
 	fn fn_stmt_params() -> miette::Result<()> {
 		parse_test("fn a(b:u8 c:s16 d:fw6 e:fl10) {}", &[
 			fn_s("a", &[
-				("b".to_string(), VT::U8),
-				("c".to_string(), VT::S16),
-				("d".to_string(), VT::F16(6)),
-				("e".to_string(), VT::F32(10)),
+				("b".into(), VT::U8),
+				("c".into(), VT::S16),
+				("d".into(), VT::F16(6)),
+				("e".into(), VT::F32(10)),
 			], None, &[], None),
 		])
 	}
@@ -1196,8 +1249,8 @@ mod test {
 	fn rec_stmt_fields() -> miette::Result<()> {
 		parse_test("rec vec{x:fl y:fl}", &[
 			rec_s("vec", &[
-				("x".to_string(), VT::F32(16)),
-				("y".to_string(), VT::F32(16)),
+				("x".into(), VT::F32(16)),
+				("y".into(), VT::F32(16)),
 			])
 		])
 	}

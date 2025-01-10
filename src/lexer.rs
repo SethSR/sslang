@@ -178,7 +178,7 @@ impl<'a> Iterator for Lexer<'a> {
 						"s32"   => TokenType::S32,
 						s => if ident.starts_with("fw") {
 							TokenType::F16(s.into())
-						} else if ident.starts_with("fl") {
+						} else if ident.starts_with("fd") {
 							TokenType::F32(s.into())
 						} else {
 							TokenType::Ident(s.into())
@@ -292,7 +292,7 @@ mod tokenizes {
 
 	#[test]
 	fn value_types() -> miette::Result<()> {
-		lex_test("u8 u16 u32 s8 s16 s32 fw fw4 fl fl22", &[
+		lex_test("u8 u16 u32 s8 s16 s32 fw fw4 fd fd22", &[
 			TokenType::U8,
 			TokenType::U16,
 			TokenType::U32,
@@ -301,8 +301,8 @@ mod tokenizes {
 			TokenType::S32,
 			TokenType::F16("fw".into()),
 			TokenType::F16("fw4".into()),
-			TokenType::F32("fl".into()),
-			TokenType::F32("fl22".into()),
+			TokenType::F32("fd".into()),
+			TokenType::F32("fd22".into()),
 		])
 	}
 

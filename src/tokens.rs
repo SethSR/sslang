@@ -27,7 +27,7 @@ pub(crate) enum TokenType {
 	S16, // s16
 	S32, // s32
 	F16(Rc<str>), // fw[0-9]*
-	F32(Rc<str>), // fl[0-9]*
+	F32(Rc<str>), // fd[0-9]*
 
 	// Operators
 	Amp1,     // '&'

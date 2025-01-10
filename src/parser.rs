@@ -31,7 +31,7 @@ impl fmt::Display for ValueType {
 			VT::S16 => write!(fmt, "s16"),
 			VT::S32 => write!(fmt, "s32"),
 			VT::F16(n) => write!(fmt, "fw{n}"),
-			VT::F32(n) => write!(fmt, "fl{n}"),
+			VT::F32(n) => write!(fmt, "fd{n}"),
 			VT::UDT(s) => write!(fmt, "{s}"),
 		}
 	}
@@ -512,7 +512,7 @@ fn value_type(
 		TokenType::S16 => ValueType::S16,
 		TokenType::S32 => ValueType::S32,
 		TokenType::F16(_) => parse_fixed_point(parser, "fw", 16).map(ValueType::F16)?,
-		TokenType::F32(_) => parse_fixed_point(parser, "fl", 32).map(ValueType::F32)?,
+		TokenType::F32(_) => parse_fixed_point(parser, "fd", 32).map(ValueType::F32)?,
 		TokenType::Ident(_) => ValueType::UDT(token.to_string()),
 		_ => return error!(token.tt, parser, "Value Type"),
 	};
@@ -1198,7 +1198,7 @@ mod test {
 
 	#[test]
 	fn fn_stmt_params() -> miette::Result<()> {
-		parse_test("fn a(b:u8 c:s16 d:fw6 e:fl10) {}", &[
+		parse_test("fn a(b:u8 c:s16 d:fw6 e:fd10) {}", &[
 			fn_s("a", &[
 				("b".into(), VT::U8),
 				("c".into(), VT::S16),
@@ -1245,7 +1245,7 @@ mod test {
 
 	#[test]
 	fn rec_stmt_fields() -> miette::Result<()> {
-		parse_test("rec vec{x:fl y:fl}", &[
+		parse_test("rec vec{x:fd y:fd}", &[
 			rec_s("vec", &[
 				("x".into(), VT::F32(16)),
 				("y".into(), VT::F32(16)),

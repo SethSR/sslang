@@ -7,8 +7,8 @@ use crate::parser::{BinaryOp, Block, S, Stmt, UnaryOp};
 
 pub(crate) fn eval(
 	ast: Vec<Stmt>,
+	mut limit: u32,
 ) -> Vec<Stmt> {
-	let mut limit = 50;
 	let mut prev = ast;
 	loop {
 		let out = prev.iter()
@@ -224,7 +224,27 @@ fn binary(op: BinaryOp, s0: S, s1: S, info: Range<usize>) -> S {
 #[cfg(test)]
 mod collapses {
 	use crate::{lexer, parser, reducer};
-	use parser::{BinaryOp, S, Stmt, UnaryOp};
+	use parser::{BinaryOp, S, Stmt, UnaryOp, ValueType};
+
+	fn id(s: &str) -> S {
+		S::Id(s.into(), 0..0)
+	}
+
+	fn num(n: i64) -> S {
+		S::Num(n, 0..0)
+	}
+
+	fn binary(op: BinaryOp, a: S, b: S) -> S {
+		S::new_binary(op, a, b, 0..0)
+	}
+
+	fn unary(op: UnaryOp, a: S) -> S {
+		S::new_unary(op, a, 0..0)
+	}
+
+	fn var(name: &str, vtype: Option<ValueType>, body: S) -> Stmt {
+		Stmt::Var { name: name.into(), vtype, body }
+	}
 
 	#[test]
 	fn numeric_literal_expressions() {
@@ -233,13 +253,9 @@ mod collapses {
 			.expect("valid token list");
 		let ast = parser::eval(input, tokens)
 			.expect("valid AST");
-		let ast = reducer::eval(ast);
+		let ast = reducer::eval(ast, 10);
 		assert_eq!(ast, vec![
-			Stmt::Var {
-				name: "a".into(),
-				vtype: None,
-				body: S::Num(13, 0..0),
-			}
+			var("a", None, num(13))
 		]);
 	}
 
@@ -250,18 +266,9 @@ mod collapses {
 			.expect("valid token list");
 		let ast = parser::eval(input, tokens)
 			.expect("valid AST");
-		let ast = reducer::eval(ast);
+		let ast = reducer::eval(ast, 10);
 		assert_eq!(ast, vec![
-			Stmt::Var {
-				name: "a".into(),
-				vtype: None,
-				body: S::new_binary(
-					BinaryOp::Add,
-					S::Id("b".into(), 0..0),
-					S::Num(4, 0..0),
-					0..0,
-				),
-			}
+			var("a", None, binary(BinaryOp::Add, id("b"), num(4)))
 		]);
 	}
 
@@ -272,18 +279,9 @@ mod collapses {
 			.expect("valid token list");
 		let ast = parser::eval(input, tokens)
 			.expect("valid AST");
-		let ast = reducer::eval(ast);
+		let ast = reducer::eval(ast, 10);
 		assert_eq!(ast, vec![
-			Stmt::Var {
-				name: "a".into(),
-				vtype: None,
-				body: S::new_binary(
-					BinaryOp::Add,
-					S::Id("b".into(), 0..0),
-					S::Num(2, 0..0),
-					0..0,
-				),
-			}
+			var("a", None, binary(BinaryOp::Add, id("b"), num(2)))
 		]);
 	}
 
@@ -294,18 +292,22 @@ mod collapses {
 			.expect("valid token list");
 		let ast = parser::eval(input, tokens)
 			.expect("valid AST");
-		let ast = reducer::eval(ast);
+		let ast = reducer::eval(ast, 10);
 		assert_eq!(ast, vec![
-			Stmt::Var {
-				name: "a".into(),
-				vtype: None,
-				body: S::new_binary(
-					BinaryOp::Add,
-					S::new_unary(UnaryOp::Neg, S::Id("b".into(), 0..0), 0..0),
-					S::Num(4, 0..0),
-					0..0,
-				),
-			}
+			var("a", None, binary(BinaryOp::Add, unary(UnaryOp::Neg, id("b")), num(4)))
+		]);
+	}
+
+	#[test]
+	fn has_type() {
+		let input = "var a: u8 = 2";
+		let tokens = lexer::eval(input)
+			.expect("valid token list");
+		let ast = parser::eval(input, tokens)
+			.expect("valid AST");
+		let ast = reducer::eval(ast, 10);
+		assert_eq!(ast, vec![
+			var("a", Some(ValueType::U8), num(2)),
 		]);
 	}
 }

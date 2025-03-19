@@ -19,6 +19,8 @@ fn main() -> miette::Result<()> {
 	let file = std::fs::read_to_string(&file_name.trim())
 		.into_diagnostic()?;
 
+	let reduce_limit = 50;
+
 	info!("lexing");
 	let tokens = lexer::eval(&file)?;
 	debug!("[{}]", tokens.iter()
@@ -29,7 +31,7 @@ fn main() -> miette::Result<()> {
 	let ast = parser::eval(&file, tokens)?;
 	debug!("{ast:?}");
 	info!("reducer");
-	let ast = reducer::eval(ast);
+	let ast = reducer::eval(ast, reduce_limit);
 	debug!("{ast:?}");
 
 	Ok(())

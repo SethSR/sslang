@@ -10,13 +10,200 @@ use crate::tokens::{Token, TokenType};
 
 pub(crate) type TypedIdent = (Rc<str>, ValueType);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ValueType {
-	U8, U16, U32,
-	S8, S16, S32,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unsigned {
+	Top, U8, U16, U32, Bot,
+}
+
+impl fmt::Display for Unsigned {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match self {
+			Self::Top => write!(f, "U::Top"),
+			Self::U8 => write!(f, "u8"),
+			Self::U16 => write!(f, "u16"),
+			Self::U32 => write!(f, "u32"),
+			Self::Bot => write!(f, "U::Bot"),
+		}
+	}
+}
+
+impl Unsigned {
+	fn meet(&self, rhs: &Self) -> Self {
+		match (self, rhs) {
+			(Self::Bot, _) | (_, Self::Bot) => Self::Bot,
+			(Self::U32, _) | (_, Self::U32) => Self::U32,
+			(Self::U16, _) | (_, Self::U16) => Self::U16,
+			(Self::U8,  _) | (_, Self::U8)  => Self::U8,
+			(Self::Top, Self::Top) => Self::Top,
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Signed {
+	Top, S8, S16, S32, Bot,
+}
+
+impl fmt::Display for Signed {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match self {
+			Self::Top => write!(f, "S::Top"),
+			Self::S8 => write!(f, "s8"),
+			Self::S16 => write!(f, "s16"),
+			Self::S32 => write!(f, "s32"),
+			Self::Bot => write!(f, "S::Bot"),
+		}
+	}
+}
+
+impl Signed {
+	fn meet(&self, rhs: &Self) -> Self {
+		match (self, rhs) {
+			(Self::Bot, _) | (_, Self::Bot) => Self::Bot,
+			(Self::S32, _) | (_, Self::S32) => Self::S32,
+			(Self::S16, _) | (_, Self::S16) => Self::S16,
+			(Self::S8,  _) | (_, Self::S8)  => Self::S8,
+			(Self::Top, Self::Top) => Self::Top,
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Int {
+	Top,
+	Unsigned(Unsigned),
+	Signed(Signed),
+	Bot,
+}
+
+impl fmt::Display for Int {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match self {
+			Self::Top => write!(f, "I::Top"),
+			Self::Unsigned(u) => write!(f, "{u}"),
+			Self::Signed(s) => write!(f, "{s}"),
+			Self::Bot => write!(f, "I::Bot"),
+		}
+	}
+}
+
+impl Int {
+	fn meet(&self, rhs: &Self) -> Self {
+		match (self, rhs) {
+			(Self::Bot, _) | (_, Self::Bot) |
+			(Self::Signed(_), Self::Unsigned(_)) |
+			(Self::Unsigned(_), Self::Signed(_)) => Self::Bot,
+
+			(Self::Unsigned(a), Self::Unsigned(b)) => Self::Unsigned(a.meet(b)),
+			(Self::Unsigned(int), Self::Top) => Self::Unsigned(*int),
+			(Self::Top, Self::Unsigned(int)) => Self::Unsigned(*int),
+
+			(Self::Signed(a), Self::Signed(b)) => Self::Signed(a.meet(b)),
+			(Self::Signed(int), Self::Top) => Self::Signed(*int),
+			(Self::Top, Self::Signed(int)) => Self::Signed(*int),
+
+			(Self::Top, Self::Top) => Self::Top,
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Fix {
+	Top,
 	F16(u8), // 16-bit fixed point with <u8> integer bits
 	F32(u8), // 32-bit fixed point with <u8> integer bits
+	Bot,
+}
+
+impl Fix {
+	fn meet(&self, _rhs: &Self) -> Self {
+		todo!()
+	}
+}
+
+// TODO - srenshaw - Change 'fw' and 'fd' to 'f' and 'd'?
+
+impl fmt::Display for Fix {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match self {
+			Self::Top => write!(f, "F::Top"),
+			Self::F16(n) => write!(f, "fw{n}"),
+			Self::F32(n) => write!(f, "fd{n}"),
+			Self::Bot => write!(f, "F::Bot"),
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ValueType {
+	/// Bottom type
+	Unit,
+	Int(Int),
+	Fix(Fix),
 	UDT(String), // User Defined Type
+	// Used for function calls, we'll resolve these later
+	/// Any type - also used for unknown/unresolved types during compilation
+	Any,
+}
+
+impl ValueType {
+	pub(crate) fn to_u8() -> Self {
+		Self::Int(Int::Unsigned(Unsigned::U8))
+	}
+
+	pub(crate) fn to_u16() -> Self {
+		Self::Int(Int::Unsigned(Unsigned::U16))
+	}
+
+	pub(crate) fn to_u32() -> Self {
+		Self::Int(Int::Unsigned(Unsigned::U32))
+	}
+
+	pub(crate) fn to_s8() -> Self {
+		Self::Int(Int::Signed(Signed::S8))
+	}
+
+	pub(crate) fn to_s16() -> Self {
+		Self::Int(Int::Signed(Signed::S16))
+	}
+
+	pub(crate) fn to_s32() -> Self {
+		Self::Int(Int::Signed(Signed::S32))
+	}
+
+	pub(crate) fn to_f16(bits: u8) -> Self {
+		Self::Fix(Fix::F16(bits))
+	}
+
+	pub(crate) fn to_f32(bits: u8) -> Self {
+		Self::Fix(Fix::F32(bits))
+	}
+
+	pub(crate) fn meet(&self, rhs: &Self) -> Self {
+		match (self, rhs) {
+			(Self::Unit, _) | (_, Self::Unit) => Self::Unit,
+
+			(Self::Int(a), Self::Int(b)) => Self::Int(a.meet(b)),
+			(Self::Int(_), Self::Fix(_)) => Self::Unit,
+			(Self::Int(_), Self::UDT(_)) => Self::Unit,
+			(Self::Int(int), Self::Any) => Self::Int(*int),
+
+			(Self::Fix(_), Self::Int(_)) => Self::Unit,
+			(Self::Fix(a), Self::Fix(b)) => Self::Fix(a.meet(b)),
+			(Self::Fix(_), Self::UDT(_)) => Self::Unit,
+			(Self::Fix(fix), Self::Any) => Self::Fix(*fix),
+
+			(Self::UDT(_), Self::Int(_)) => Self::Unit,
+			(Self::UDT(_), Self::Fix(_)) => Self::Unit,
+			(Self::UDT(_), Self::UDT(_)) => Self::Unit,
+			(Self::UDT(udt), Self::Any) => Self::UDT(udt.clone()),
+
+			(Self::Any, Self::Int(_)) => Self::Unit,
+			(Self::Any, Self::Fix(_)) => Self::Unit,
+			(Self::Any, Self::UDT(_)) => Self::Unit,
+			(Self::Any, Self::Any) => Self::Any,
+		}
+	}
 }
 
 impl fmt::Display for ValueType {
@@ -24,15 +211,11 @@ impl fmt::Display for ValueType {
 		use ValueType as VT;
 
 		match self {
-			VT::U8 => write!(fmt, "u8"),
-			VT::U16 => write!(fmt, "u16"),
-			VT::U32 => write!(fmt, "u32"),
-			VT::S8 => write!(fmt, "s8"),
-			VT::S16 => write!(fmt, "s16"),
-			VT::S32 => write!(fmt, "s32"),
-			VT::F16(n) => write!(fmt, "fw{n}"),
-			VT::F32(n) => write!(fmt, "fd{n}"),
+			VT::Int(int) => write!(fmt, "{int}"),
+			VT::Fix(fix) => write!(fmt, "{fix}"),
 			VT::UDT(s) => write!(fmt, "{s}"),
+			VT::Unit => write!(fmt, "()"),
+			VT::Any => write!(fmt, "??"),
 		}
 	}
 }
@@ -263,6 +446,7 @@ impl fmt::Display for BinaryOp {
 #[derive(Debug, Clone)]
 pub(crate) struct Node {
 	pub(crate) info: TokenInfo,
+	pub(crate) kind: ValueType,
 	pub(crate) expr: Box<Expr>,
 }
 
@@ -273,8 +457,8 @@ impl PartialEq for Node {
 }
 
 impl Node {
-	pub(crate) fn new(expr: Expr, info: TokenInfo) -> Self {
-		Self { expr: expr.into(), info }
+	pub(crate) fn new(expr: Expr, kind: ValueType, info: TokenInfo) -> Self {
+		Self { info, kind, expr: expr.into() }
 	}
 }
 
@@ -286,6 +470,9 @@ impl fmt::Display for Node {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Expr {
+	Num(i64),
+	Id(Rc<str>),
+	Block(Vec<Node>),
 	Rec {
 		name: Rc<str>,
 		fields: Vec<TypedIdent>,
@@ -293,12 +480,12 @@ pub(crate) enum Expr {
 	Fun {
 		name: Rc<str>,
 		params: Vec<TypedIdent>,
-		rtype: Option<ValueType>,
+		rtype: ValueType,
 		body: Vec<Node>,
 	},
 	Var {
 		name: Rc<str>,
-		vtype: Option<ValueType>,
+		vtype: ValueType,
 		body: Node,
 	},
 	If {
@@ -314,9 +501,6 @@ pub(crate) enum Expr {
 		name: Rc<str>,
 		body: Node,
 	},
-	Num(i64),
-	Id(Rc<str>),
-	Block(Vec<Node>),
 	Unary {
 		op: UnaryOp,
 		rhs: Node,
@@ -333,51 +517,65 @@ pub(crate) enum Expr {
 }
 
 impl Node {
-	pub(crate) fn new_while(cond: Node, body: Vec<Node>, info: TokenInfo) -> Self {
-		Self::new(Expr::While { cond, body }, info)
-	}
-
 	pub(crate) fn new_block(b: Vec<Node>, info: TokenInfo) -> Self {
-		Self::new(Expr::Block(b), info)
+		Self::new(Expr::Block(b), ValueType::Unit, info)
 	}
 
-	pub(crate) fn new_if(cond: Node, bt: Vec<Node>, bf: Vec<Node>, info: TokenInfo) -> Self {
-		Self::new(Expr::If { cond, bt, bf }, info)
-	}
-
-	pub(crate) fn new_unary(op: UnaryOp, rhs: Node, info: TokenInfo) -> Self {
-		Self::new(Expr::Unary { op, rhs }, info)
-	}
-
-	pub(crate) fn new_binary(op: BinaryOp, lhs: Node, rhs: Node, info: TokenInfo) -> Self {
-		Self::new(Expr::Binary { op, lhs, rhs }, info)
-	}
-
-	pub(crate) fn new_var(
-		name: Rc<str>,
-		vtype: Option<ValueType>,
-		body: Node,
-		info: TokenInfo,
-	) -> Self {
-		Self::new(Expr::Var { name, vtype, body }, info)
+	pub(crate) fn new_rec(name: Rc<str>, fields: Vec<TypedIdent>, info: TokenInfo) -> Self {
+		let udt = name.to_string();
+		Self::new(Expr::Rec { name, fields }, ValueType::UDT(udt), info)
 	}
 
 	pub(crate) fn new_fun(
 		name: Rc<str>,
 		params: Vec<TypedIdent>,
-		rtype: Option<ValueType>,
+		rtype: ValueType,
 		body: Vec<Node>,
 		info: TokenInfo,
 	) -> Self {
-		Self::new(Expr::Fun { name, params, rtype, body }, info)
+		let kind = rtype.clone();
+		Self::new(Expr::Fun { name, params, rtype, body }, kind, info)
+	}
+
+	pub(crate) fn new_var(
+		name: Rc<str>,
+		vtype: ValueType,
+		body: Node,
+		info: TokenInfo,
+	) -> Self {
+		let kind = vtype.clone();
+		Self::new(Expr::Var { name, vtype, body }, kind, info)
+	}
+
+	pub(crate) fn new_if(cond: Node, bt: Vec<Node>, bf: Vec<Node>, info: TokenInfo) -> Self {
+		let kind = match (bt.last(), bf.last()) {
+			(Some(true_node), Some(false_node)) => true_node.kind.meet(&false_node.kind),
+			_ => ValueType::Unit,
+		};
+		Self::new(Expr::If { cond, bt, bf }, kind, info)
+	}
+
+	pub(crate) fn new_while(cond: Node, body: Vec<Node>, info: TokenInfo) -> Self {
+		Self::new(Expr::While { cond, body }, ValueType::Unit, info)
 	}
 
 	pub(crate) fn new_assign(name: Rc<str>, body: Node, info: TokenInfo) -> Self {
-		Self::new(Expr::Assign { name, body }, info)
+		let kind = body.kind.clone();
+		Self::new(Expr::Assign { name, body }, kind, info)
+	}
+
+	pub(crate) fn new_unary(op: UnaryOp, rhs: Node, info: TokenInfo) -> Self {
+		let kind = rhs.kind.clone();
+		Self::new(Expr::Unary { op, rhs }, kind, info)
+	}
+
+	pub(crate) fn new_binary(op: BinaryOp, lhs: Node, rhs: Node, info: TokenInfo) -> Self {
+		let kind = lhs.kind.meet(&rhs.kind);
+		Self::new(Expr::Binary { op, lhs, rhs }, kind, info)
 	}
 
 	pub(crate) fn new_call(name: Rc<str>, args: Vec<Node>, info: TokenInfo) -> Self {
-		Self::new(Expr::FnCall { name, args }, info)
+		Self::new(Expr::FnCall { name, args }, ValueType::Any, info)
 	}
 }
 
@@ -400,20 +598,9 @@ impl fmt::Display for Expr {
 			Expr::Block(b)                => write!(fmt, "{b:?}"),
 			Expr::Unary { op, rhs }       => write!(fmt, "({op} {rhs})"),
 			Expr::Binary { op, lhs, rhs } => write!(fmt, "({op} {lhs} {rhs})"),
-			Expr::Fun { name, params, rtype, body } => {
-				write!(fmt, "(fn {name} ({})", show(params, |(s,vt)| format!("{s}: {vt}")))?;
-				if let Some(rt) = rtype {
-					write!(fmt, " -> {rt}")?;
-				}
-				write!(fmt, " {body:?})")
-			}
-			Expr::Var { name, vtype, body } => {
-				write!(fmt, "(var {name}")?;
-				if let Some(vt) = vtype {
-					write!(fmt, ": {vt}")?;
-				}
-				write!(fmt, " = {body})")
-			}
+			Expr::Fun { name, params, rtype, body } => write!(fmt, "(fn {name} ({}) -> {rtype} {body:?})",
+				show(params, |(s,vt)| format!("{s}: {vt}"))),
+			Expr::Var { name, vtype, body } => write!(fmt, "(var {name}: {vtype} = {body}"),
 			Expr::If { cond, bt, bf } => write!(fmt, "(if {cond} {bt:?} {bf:?})"),
 			Expr::FnCall { name, args } => write!(fmt, "{name}({args:?})"),
 		}
@@ -567,14 +754,14 @@ fn value_type(
 ) -> miette::Result<ValueType> {
 	let token = parser.peek(0).clone();
 	let out = match token.tt {
-		TokenType::U8  => ValueType::U8,
-		TokenType::U16 => ValueType::U16,
-		TokenType::U32 => ValueType::U32,
-		TokenType::S8  => ValueType::S8,
-		TokenType::S16 => ValueType::S16,
-		TokenType::S32 => ValueType::S32,
-		TokenType::F16(_) => parse_fixed_point(parser, "fw", 16).map(ValueType::F16)?,
-		TokenType::F32(_) => parse_fixed_point(parser, "fd", 32).map(ValueType::F32)?,
+		TokenType::U8  => ValueType::to_u8(),
+		TokenType::U16 => ValueType::to_u16(),
+		TokenType::U32 => ValueType::to_u32(),
+		TokenType::S8  => ValueType::to_s8(),
+		TokenType::S16 => ValueType::to_s16(),
+		TokenType::S32 => ValueType::to_s32(),
+		TokenType::F16(_) => parse_fixed_point(parser, "fw", 16).map(ValueType::to_f16)?,
+		TokenType::F32(_) => parse_fixed_point(parser, "fd", 32).map(ValueType::to_f32)?,
 		TokenType::Ident(_) => ValueType::UDT(token.to_string()),
 		_ => return error!(token.tt, parser, "Value Type"),
 	};
@@ -733,17 +920,16 @@ fn expr<'a>(
 
 		TT::Ident(ref s) => {
 			parser.index += 1;
-			Node {
-				expr: Expr::Id(s.to_owned()).into(),
-				info: left_token.range(),
-			}
+			Node::new(Expr::Id(s.to_owned()), ValueType::Any, left_token.range())
 		}
+
 		TT::Number(ref n) => {
 			parser.index += 1;
-			Node {
-				expr: Expr::Num(n.parse::<i64>().into_diagnostic()?).into(),
-				info: left_token.range(),
-			}
+			Node::new(
+				Expr::Num(n.parse::<i64>().into_diagnostic()?),
+				ValueType::Int(Int::Bot),
+				left_token.range(),
+			)
 		}
 
 		TT::If => {
@@ -774,8 +960,10 @@ fn expr<'a>(
 			let rhs = expr(parser, r_bp)?;
 			Node::new_unary((&left_token.tt).try_into()?, rhs, left_token.range())
 		}
+
 		TT::EOF => return error!(eof, parser,
 			"Identifier, Function Call, or Literal"),
+
 		_ => return error!(parser,
 			"Identifier, Function Call, or Literal"),
 	};
@@ -804,6 +992,7 @@ fn expr<'a>(
 			if TT::CParen == parser.peek(0).tt {
 				parser.index += 1;
 				lhs = Node {
+					kind: ValueType::Any,
 					expr: Expr::FnCall { name, args: vec![] }.into(),
 					info: lhs.info.start..op_token.range().end,
 				};
@@ -818,6 +1007,7 @@ fn expr<'a>(
 			}
 			parser.index += 1;
 			lhs = Node {
+				kind: ValueType::Any,
 				expr: Expr::FnCall { name, args }.into(),
 				info: lhs.info.start..op_token.range().end,
 			};
@@ -886,7 +1076,7 @@ fn stmt_rec(
 	let fields = params(parser)?;
 	match_token(parser, TokenType::CBrace)?;
 	let end = parser.peek(-1).range().end;
-	Ok(Node::new(Expr::Rec { name, fields }, start..end))
+	Ok(Node::new_rec(name, fields, start..end))
 }
 
 /// fn := 'fn' ident '(' params ')' ('->' value_type)? block
@@ -902,10 +1092,11 @@ fn stmt_fn(
 	match_token(parser, TokenType::CParen)?;
 	let rtype = match_token(parser, TokenType::RetArrow)
 		.and_then(|_| value_type(parser))
-		.ok();
+		.unwrap_or(ValueType::Unit);
 	let body = block(parser)?;
 	let end = parser.peek(-1).range().end;
-	Ok(Node::new(Expr::Fun { name, params, rtype, body }, start..end))
+	let kind = rtype.clone();
+	Ok(Node::new(Expr::Fun { name, params, rtype, body }, kind, start..end))
 }
 
 /// var := 'var' ident (':' value_type)? '=' (block | expr)
@@ -918,14 +1109,15 @@ fn stmt_var<'a>(
 	let name = ident(parser)?;
 	let vtype = match_token(parser, TokenType::Colon)
 		.and_then(|_| value_type(parser))
-		.ok();
+		.unwrap_or(ValueType::Unit);
 	match_token(parser, TokenType::Eq1)?;
 	let body_start = parser.peek(0).range().start;
 	let body = block(parser)
 		.map(|b| Node::new_block(b, body_start..parser.peek(-1).range().end))
 		.or_else(|_| expr(parser, 0))?;
 	let end = parser.peek(-1).range().end;
-	Ok(Node::new(Expr::Var { name, vtype, body }, start..end))
+	let kind = vtype.clone();
+	Ok(Node::new(Expr::Var { name, vtype, body }, kind, start..end))
 }
 
 /// while := 'while' expr block
@@ -957,7 +1149,8 @@ fn stmt_assign<'a>(
 		.map(|b| Node::new_block(b, body_start..parser.peek(-1).range().end))
 		.or_else(|_| expr(parser, 0))?;
 	let end = parser.peek(-1).range().end;
-	Ok(Node::new(Expr::Assign { name, body }, start..end))
+	let kind = body.kind.clone();
+	Ok(Node::new(Expr::Assign { name, body }, kind, start..end))
 }
 
 /// program := statement*
@@ -984,6 +1177,7 @@ mod test {
 
 	fn num(n: i64) -> Node {
 		Node {
+			kind: VT::Any,
 			expr: Expr::Num(n).into(),
 			info: 0..0,
 		}
@@ -991,6 +1185,7 @@ mod test {
 
 	fn ident(s: &str) -> Node {
 		Node {
+			kind: VT::Any,
 			expr: Expr::Id(s.into()).into(),
 			info: 0..0,
 		}
@@ -998,6 +1193,7 @@ mod test {
 
 	fn unary(op: UnaryOp, rhs: Node) -> Node {
 		Node {
+			kind: rhs.kind.clone(),
 			expr: Expr::Unary { op, rhs }.into(),
 			info: 0..0,
 		}
@@ -1005,6 +1201,7 @@ mod test {
 
 	fn binary(op: BinaryOp, lhs: Node, rhs: Node) -> Node {
 		Node {
+			kind: lhs.kind.meet(&rhs.kind),
 			expr: Expr::Binary { op, lhs, rhs }.into(),
 			info: 0..0,
 		}
@@ -1012,6 +1209,7 @@ mod test {
 
 	fn fn_call(name: &str, s: &[Node]) -> Node {
 		Node {
+			kind: VT::Any,
 			expr: Expr::FnCall {
 				name: name.into(),
 				args: s.to_vec(),
@@ -1035,10 +1233,11 @@ mod test {
 
 	fn var_s(
 		name: &str,
-		vtype: Option<VT>,
+		vtype: VT,
 		body: Node,
 	) -> Node {
 		Node {
+			kind: vtype.clone(),
 			expr: Expr::Var {
 				name: name.into(),
 				vtype,
@@ -1051,10 +1250,11 @@ mod test {
 	fn fn_s(
 		name: &str,
 		params: &[TypedIdent],
-		rtype: Option<VT>,
+		rtype: VT,
 		body: &[Node],
 	) -> Node {
 		Node {
+			kind: VT::Any,
 			expr: Expr::Fun {
 				name: name.into(),
 				params: params.to_vec(),
@@ -1070,6 +1270,7 @@ mod test {
 		fields: &[TypedIdent],
 	) -> Node {
 		Node {
+			kind: VT::Unit,
 			expr: Expr::Rec {
 				name: name.into(),
 				fields: fields.to_vec(),
@@ -1084,6 +1285,7 @@ mod test {
 		bf: &[Node],
 	) -> Node {
 		Node {
+			kind: bt.last().zip(bf.last()).map(|(t,f)| t.kind.meet(&f.kind)).unwrap_or(VT::Unit),
 			expr: Expr::If {
 				cond,
 				bt: bt.to_vec(),
@@ -1098,6 +1300,7 @@ mod test {
 		body: &[Node],
 	) -> Node {
 		Node {
+			kind: VT::Unit,
 			expr: Expr::While {
 				cond,
 				body: body.to_vec(),
@@ -1111,6 +1314,7 @@ mod test {
 		body: Node,
 	) -> Node {
 		Node {
+			kind: body.kind.clone(),
 			expr: Expr::Assign {
 				name: name.into(),
 				body,
@@ -1187,14 +1391,14 @@ mod test {
 	#[test]
 	fn var_stmt() -> miette::Result<()> {
 		parse_test("var a = 0", &[
-			var_s("a", None, num(0)),
+			var_s("a", VT::Unit, num(0)),
 		])
 	}
 
 	#[test]
 	fn var_stmt_expr() -> miette::Result<()> {
 		parse_test("var a = 3 * 2 + 1", &[
-			var_s("a", None, binary(BinaryOp::Add,
+			var_s("a", VT::Unit, binary(BinaryOp::Add,
 				binary(BinaryOp::Mul, num(3), num(2)),
 				num(1),
 			)),
@@ -1204,35 +1408,35 @@ mod test {
 	#[test]
 	fn var_stmt_vtype() -> miette::Result<()> {
 		parse_test("var a: u8 = 0", &[
-			var_s("a", Some(VT::U8), num(0)),
+			var_s("a", VT::to_u8(), num(0)),
 		])
 	}
 
 	#[test]
 	fn var_stmt_udt_simple() -> miette::Result<()> {
 		parse_test("var a = b", &[
-			var_s("a", None, ident("b")),
+			var_s("a", VT::Unit, ident("b")),
 		])
 	}
 
 	#[test]
 	fn var_stmt_udt_fncall_empty() -> miette::Result<()> {
 		parse_test("var a = b()", &[
-			var_s("a", None, fn_call("b", &[]))
+			var_s("a", VT::Unit, fn_call("b", &[]))
 		])
 	}
 
 	#[test]
 	fn var_stmt_udt_fncall_single() -> miette::Result<()> {
 		parse_test("var a = b(c)", &[
-			var_s("a", None, fn_call("b", &[ident("c")]))
+			var_s("a", VT::Unit, fn_call("b", &[ident("c")]))
 		])
 	}
 
 	#[test]
 	fn var_stmt_udt_fncall_multi() -> miette::Result<()> {
 		parse_test("var a = b(c, d + e)", &[
-			var_s("a", None, fn_call("b", &[
+			var_s("a", VT::Unit, fn_call("b", &[
 				ident("c"),
 				binary(BinaryOp::Add, ident("d"), ident("e")),
 			]))
@@ -1242,7 +1446,7 @@ mod test {
 	#[test]
 	fn fn_stmt() -> miette::Result<()> {
 		parse_test("fn a() {}", &[
-			fn_s("a", &[], None, &[]),
+			fn_s("a", &[], VT::Unit, &[]),
 		])
 	}
 
@@ -1250,25 +1454,25 @@ mod test {
 	fn fn_stmt_params() -> miette::Result<()> {
 		parse_test("fn a(b:u8 c:s16 d:fw6 e:fd10) {}", &[
 			fn_s("a", &[
-				("b".into(), VT::U8),
-				("c".into(), VT::S16),
-				("d".into(), VT::F16(6)),
-				("e".into(), VT::F32(10)),
-			], None, &[]),
+				("b".into(), VT::to_u8()),
+				("c".into(), VT::to_s16()),
+				("d".into(), VT::to_f16(6)),
+				("e".into(), VT::to_f32(10)),
+			], VT::Unit, &[]),
 		])
 	}
 
 	#[test]
 	fn fn_stmt_rtype_simple() -> miette::Result<()> {
 		parse_test("fn a() -> u8 {}", &[
-			fn_s("a", &[], Some(VT::U8), &[])
+			fn_s("a", &[], VT::to_u8(), &[])
 		])
 	}
 
 	#[test]
 	fn fn_stmt_rtype_udt() -> miette::Result<()> {
 		parse_test("fn a() -> b {}", &[
-			fn_s("a", &[], Some(VT::UDT("b".to_string())), &[])
+			fn_s("a", &[], VT::UDT("b".to_string()), &[])
 		])
 	}
 
@@ -1279,9 +1483,9 @@ mod test {
 			var c = 2
 			b + c
 		}", &[
-			fn_s("a", &[], None, &[
-				var_s("b", None, num(1)),
-				var_s("c", None, num(2)),
+			fn_s("a", &[], VT::Unit, &[
+				var_s("b", VT::Unit, num(1)),
+				var_s("c", VT::Unit, num(2)),
 				binary(BinaryOp::Add, ident("b"), ident("c")),
 			]),
 		])
@@ -1298,8 +1502,8 @@ mod test {
 	fn rec_stmt_fields() -> miette::Result<()> {
 		parse_test("rec vec{x:fd y:fd}", &[
 			rec_s("vec", &[
-				("x".into(), VT::F32(16)),
-				("y".into(), VT::F32(16)),
+				("x".into(), VT::to_f32(16)),
+				("y".into(), VT::to_f32(16)),
 			])
 		])
 	}
@@ -1307,7 +1511,7 @@ mod test {
 	#[test]
 	fn field_access() -> miette::Result<()> {
 		parse_test("var a = b.c.d", &[
-			var_s("a", None, binary(BinaryOp::Accessor,
+			var_s("a", VT::Unit, binary(BinaryOp::Accessor,
 				ident("b"),
 				binary(BinaryOp::Accessor, ident("c"), ident("d")),
 			))

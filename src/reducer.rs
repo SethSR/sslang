@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use tracing::warn;
 
-use crate::parser::{BinaryOp, Expr, Node, UnaryOp};
+use crate::parser::{BinaryOp, Expr, Node, UnaryOp, ValueType};
 
 pub(crate) fn eval(
 	ast: Vec<Node>,
@@ -61,12 +61,12 @@ fn reduce_list(nodes: Vec<Node>) -> Vec<Node> {
 fn unary(op: UnaryOp, s: Node, info: Range<usize>) -> Node {
 	match op {
 		UnaryOp::Neg => if let Expr::Num(n) = *s.expr {
-			Node::new(Expr::Num(-n), info)
+			Node::new(Expr::Num(-n), s.kind, info)
 		} else {
 			Node::new_unary(op, s, info)
 		}
 		UnaryOp::Not => if let Expr::Num(n) = *s.expr {
-			Node::new(Expr::Num(!n), info)
+			Node::new(Expr::Num(!n), s.kind, info)
 		} else {
 			Node::new_unary(op, s, info)
 		}
@@ -84,33 +84,42 @@ fn collapse_binop(
 	info: Range<usize>,
 ) -> Node {
 	match (*lhs.expr, *rhs.expr) {
-		(Expr::Num(n0), Expr::Num(n1)) => Node::new(Expr::Num(f(n0,n1)), info),
+		(Expr::Num(n0), Expr::Num(n1)) => Node::new(Expr::Num(f(n0,n1)), ValueType::Unit, info),
 		(lex, rex) => Node::new_binary(
 			op,
-			Node::new(lex, lhs.info),
-			Node::new(rex, rhs.info),
+			Node::new(lex, lhs.kind, lhs.info),
+			Node::new(rex, rhs.kind, rhs.info),
 			info,
 		),
 	}
 }
 
 fn binary(op: BinaryOp, lhs: Node, rhs: Node, info: Range<usize>) -> Node {
+	let kind = lhs.kind.meet(&rhs.kind);
 	match op {
 		BinaryOp::Add => match ((*lhs.expr).clone(), (*rhs.expr).clone()) {
-			(Expr::Num(n0), Expr::Num(n1)) => Node { expr: Expr::Num(n0 + n1).into(), info },
+			(Expr::Num(n0), Expr::Num(n1)) => Node::new(Expr::Num(n0 + n1), kind, info),
 			(s_0, Expr::Num(n1)) => if let Expr::Binary { op: BinaryOp::Add, lhs: lhs0, rhs: lhs1 } = s_0 {
 				// ((lhs0 + lhs1) + rhs)
 				match (*lhs0.expr, *lhs1.expr) {
 					(Expr::Num(n00), s_01) => Node::new_binary(
 						BinaryOp::Add,
-						Node::new(s_01, lhs1.info),
-						Node::new(Expr::Num(n00 + n1), lhs0.info.start..rhs.info.end),
+						Node::new(s_01, lhs1.kind, lhs1.info),
+						Node::new(
+							Expr::Num(n00 + n1),
+							lhs0.kind.meet(&rhs.kind),
+							lhs0.info.start..rhs.info.end,
+						),
 						info,
 					),
 					(s_00, Expr::Num(n01)) => Node::new_binary(
 						BinaryOp::Add,
-						Node::new(s_00, lhs0.info),
-						Node::new(Expr::Num(n01 + n1), lhs1.info.start..rhs.info.end),
+						Node::new(s_00, lhs0.kind, lhs0.info),
+						Node::new(
+							Expr::Num(n01 + n1),
+							lhs1.kind.meet(&rhs.kind),
+							lhs1.info.start..rhs.info.end,
+						),
 						info,
 					),
 					_ => Node::new_binary(BinaryOp::Add, lhs, rhs, info),
@@ -151,11 +160,15 @@ fn binary(op: BinaryOp, lhs: Node, rhs: Node, info: Range<usize>) -> Node {
 		BinaryOp::RShift =>
 			collapse_binop(|n0,n1| n0 >> n1, op, lhs, rhs, info),
 		BinaryOp::Sub => match ((*lhs.expr).clone(), (*rhs.expr).clone()) {
-			(Expr::Num(n0), Expr::Num(n1)) => Node::new(Expr::Num(n0 - n1), info),
+			(Expr::Num(n0), Expr::Num(n1)) => Node::new(
+				Expr::Num(n0 - n1),
+				lhs.kind.meet(&rhs.kind),
+				info,
+			),
 			(_, Expr::Num(n1)) => Node::new_binary(
 				BinaryOp::Add,
 				lhs,
-				Node::new(Expr::Num(-n1),rhs.info),
+				Node::new(Expr::Num(-n1), rhs.kind, rhs.info),
 				info,
 			),
 			_ => {
@@ -188,11 +201,11 @@ mod collapses {
 	use parser::{BinaryOp, Expr, Node, UnaryOp, ValueType};
 
 	fn id(s: &str) -> Node {
-		Node::new(Expr::Id(s.into()), 0..0)
+		Node::new(Expr::Id(s.into()), ValueType::Any, 0..0)
 	}
 
 	fn num(n: i64) -> Node {
-		Node::new(Expr::Num(n), 0..0)
+		Node::new(Expr::Num(n), ValueType::Any, 0..0)
 	}
 
 	fn binary(op: BinaryOp, a: Node, b: Node) -> Node {
@@ -203,8 +216,9 @@ mod collapses {
 		Node::new_unary(op, a, 0..0)
 	}
 
-	fn var(name: &str, vtype: Option<ValueType>, body: Node) -> Node {
-		Node::new(Expr::Var { name: name.into(), vtype, body }, 0..0)
+	fn var(name: &str, vtype: ValueType, body: Node) -> Node {
+		let kind = vtype.clone();
+		Node::new(Expr::Var { name: name.into(), vtype, body }, kind, 0..0)
 	}
 
 	#[test]
@@ -216,7 +230,7 @@ mod collapses {
 			.expect("valid AST");
 		let ast = reducer::eval(ast, 10);
 		assert_eq!(ast, vec![
-			var("a", None, num(13))
+			var("a", ValueType::Unit, num(13))
 		]);
 	}
 
@@ -229,7 +243,7 @@ mod collapses {
 			.expect("valid AST");
 		let ast = reducer::eval(ast, 10);
 		assert_eq!(ast, vec![
-			var("a", None, binary(BinaryOp::Add, id("b"), num(4)))
+			var("a", ValueType::Unit, binary(BinaryOp::Add, id("b"), num(4)))
 		]);
 	}
 
@@ -242,7 +256,7 @@ mod collapses {
 			.expect("valid AST");
 		let ast = reducer::eval(ast, 10);
 		assert_eq!(ast, vec![
-			var("a", None, binary(BinaryOp::Add, id("b"), num(2)))
+			var("a", ValueType::Unit, binary(BinaryOp::Add, id("b"), num(2)))
 		]);
 	}
 
@@ -255,7 +269,7 @@ mod collapses {
 			.expect("valid AST");
 		let ast = reducer::eval(ast, 10);
 		assert_eq!(ast, vec![
-			var("a", None, binary(BinaryOp::Add, unary(UnaryOp::Neg, id("b")), num(4)))
+			var("a", ValueType::Unit, binary(BinaryOp::Add, unary(UnaryOp::Neg, id("b")), num(4)))
 		]);
 	}
 
@@ -268,7 +282,7 @@ mod collapses {
 			.expect("valid AST");
 		let ast = reducer::eval(ast, 10);
 		assert_eq!(ast, vec![
-			var("a", Some(ValueType::U8), num(2)),
+			var("a", ValueType::to_u8(), num(2)),
 		]);
 	}
 }

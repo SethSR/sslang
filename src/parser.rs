@@ -129,7 +129,7 @@ pub(crate) enum BinaryOp {
 	/// '/%'
 	DivMod,
 	/// '<|'
-	LFShift,
+	LRot,
 	/// '<<'
 	LShift,
 	/// '%'
@@ -141,7 +141,7 @@ pub(crate) enum BinaryOp {
 	/// '||'
 	OrL,
 	/// '|>'
-	RFShift,
+	RRot,
 	/// '>>'
 	RShift,
 	/// '-'
@@ -169,14 +169,14 @@ impl TryFrom<TokenType> for BinaryOp {
 			TokenType::Eq2      => Ok(BinaryOp::CmpEq),
 			TokenType::LArrow1  => Ok(BinaryOp::CmpLT),
 			TokenType::LArrow2  => Ok(BinaryOp::LShift),
-			TokenType::LArrBar  => Ok(BinaryOp::LFShift),
+			TokenType::LArrBar  => Ok(BinaryOp::LRot),
 			TokenType::LArrEq   => Ok(BinaryOp::CmpLE),
 			TokenType::Minus    => Ok(BinaryOp::Sub),
 			TokenType::Percent  => Ok(BinaryOp::Mod),
 			TokenType::Plus     => Ok(BinaryOp::Add),
 			TokenType::RArrow1  => Ok(BinaryOp::CmpGT),
 			TokenType::RArrow2  => Ok(BinaryOp::RShift),
-			TokenType::RArrBar  => Ok(BinaryOp::RFShift),
+			TokenType::RArrBar  => Ok(BinaryOp::RRot),
 			TokenType::RArrEq   => Ok(BinaryOp::CmpGE),
 			TokenType::Slash    => Ok(BinaryOp::Div),
 			TokenType::SlashPer => Ok(BinaryOp::DivMod),
@@ -205,14 +205,14 @@ impl TryFrom<&TokenType> for BinaryOp {
 			TokenType::Eq2      => Ok(BinaryOp::CmpEq),
 			TokenType::LArrow1  => Ok(BinaryOp::CmpLT),
 			TokenType::LArrow2  => Ok(BinaryOp::LShift),
-			TokenType::LArrBar  => Ok(BinaryOp::LFShift),
+			TokenType::LArrBar  => Ok(BinaryOp::LRot),
 			TokenType::LArrEq   => Ok(BinaryOp::CmpLE),
 			TokenType::Minus    => Ok(BinaryOp::Sub),
 			TokenType::Percent  => Ok(BinaryOp::Mod),
 			TokenType::Plus     => Ok(BinaryOp::Add),
 			TokenType::RArrow1  => Ok(BinaryOp::CmpGT),
 			TokenType::RArrow2  => Ok(BinaryOp::RShift),
-			TokenType::RArrBar  => Ok(BinaryOp::RFShift),
+			TokenType::RArrBar  => Ok(BinaryOp::RRot),
 			TokenType::RArrEq   => Ok(BinaryOp::CmpGE),
 			TokenType::Slash    => Ok(BinaryOp::Div),
 			TokenType::SlashPer => Ok(BinaryOp::DivMod),
@@ -241,13 +241,13 @@ impl fmt::Display for BinaryOp {
 			BinaryOp::Comma    => ",",
 			BinaryOp::Div      => "/",
 			BinaryOp::DivMod   => "/%",
-			BinaryOp::LFShift  => "<|",
+			BinaryOp::LRot     => "<|",
 			BinaryOp::LShift   => "<<",
 			BinaryOp::Mod      => "%",
 			BinaryOp::Mul      => "*",
 			BinaryOp::OrB      => "|",
 			BinaryOp::OrL      => "||",
-			BinaryOp::RFShift  => "|>",
+			BinaryOp::RRot     => "|>",
 			BinaryOp::RShift   => ">>",
 			BinaryOp::Sub      => "-",
 			BinaryOp::XorB     => "^",
@@ -257,103 +257,165 @@ impl fmt::Display for BinaryOp {
 	}
 }
 
-#[derive(Clone)]
-pub(crate) enum S {
-	Num(i64, TokenInfo),
-	Id(Rc<str>, TokenInfo),
-	Block(Box<Block>, TokenInfo),
-	If(Box<S>, Box<Block>, Option<Box<Block>>, TokenInfo),
-	Unary(UnaryOp, Box<S>, TokenInfo),
-	Binary(BinaryOp, Box<S>, Box<S>, TokenInfo),
-	FnCall(Rc<str>, Vec<S>, TokenInfo),
+// TODO - srenshaw - Move node-types from Expr into Node.
+// TODO - srenshaw - Create a more robust type system. (Probably based on github.com/SeaOfNodes)
+
+#[derive(Debug, Clone)]
+pub(crate) struct Node {
+	pub(crate) info: TokenInfo,
+	pub(crate) expr: Box<Expr>,
 }
 
-impl S {
-	pub(crate) fn new_block(b: Block, t: TokenInfo) -> Self {
-		S::Block(Box::new(b), t)
-	}
-
-	pub(crate) fn new_if(cond: S, bt: Block, bf: Option<Block>, t: TokenInfo) -> Self {
-		S::If(Box::new(cond), Box::new(bt), bf.map(Box::new), t)
-	}
-
-	pub(crate) fn new_unary(op: UnaryOp, s: S, t: TokenInfo) -> Self {
-		S::Unary(op, Box::new(s), t)
-	}
-
-	pub(crate) fn new_binary(op: BinaryOp, s0: S, s1: S, t: TokenInfo) -> Self {
-		S::Binary(op, Box::new(s0), Box::new(s1), t)
-	}
-
-	pub(crate) fn info(&self) -> TokenInfo {
-		match self {
-			S::Num(_,info) => info,
-			S::Id(_,info) => info,
-			S::Block(_,info) => info,
-			S::If(_,_,_,info) => info,
-			S::Unary(_,_,info) => info,
-			S::Binary(_,_,_,info) => info,
-			S::FnCall(_,_,info) => info,
-		}.clone()
-	}
-}
-
-impl PartialEq for S {
+impl PartialEq for Node {
 	fn eq(&self, rhs: &Self) -> bool {
-		match (self, rhs) {
-			(S::Num(ln,_), S::Num(rn,_)) => ln == rn,
-			(S::Id(ls,_), S::Id(rs,_)) => ls == rs,
-			(S::Block(lb,_), S::Block(rb,_)) => lb == rb,
-			(S::If(lcond,lbt,lbf,_), S::If(rcond,rbt,rbf,_)) =>
-				lcond == rcond && lbt == rbt && lbf == rbf,
-			(S::Unary(lop,ls,_), S::Unary(rop,rs,_)) =>
-				lop == rop && ls == rs,
-			(S::Binary(lop,ls0,ls1,_), S::Binary(rop,rs0,rs1,_)) =>
-				lop == rop && ls0 == rs0 && ls1 == rs1,
-			(S::FnCall(lname,llist,_), S::FnCall(rname,rlist,_)) =>
-				lname == rname && llist == rlist,
-			_ => false,
-		}
+		self.expr == rhs.expr
 	}
 }
 
-impl fmt::Debug for S {
-	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-		match self {
-			S::Num(n,info)               => write!(fmt, "{n}[{info:?}]"),
-			S::Id(s,info)                => write!(fmt, "{s}[{info:?}]"),
-			S::Block(b,info)             => write!(fmt, "{b}[{info:?}]"),
-			S::If(cond,bt,Some(bf),info) => write!(fmt, "(if[{info:?}] {cond} {bt} else {bf})"),
-			S::If(cond,bt,None,info)     => write!(fmt, "(if[{info:?}] {cond} {bt})"),
-			S::Unary(op,s,info)          => write!(fmt, "({op}[{info:?}] {s})"),
-			S::Binary(op,s0,s1,info)     => write!(fmt, "({op}[{info:?}] {s0} {s1})"),
-			S::FnCall(name,list,info)    => write!(fmt, "{name}[{info:?}]({})",
-				list.iter().fold(String::with_capacity(list.len()), |mut acc,t| {
-					acc.push_str(&t.to_string());
-					acc.push(' ');
-					acc
-				}).trim()),
-		}
+impl Node {
+	pub(crate) fn new(expr: Expr, info: TokenInfo) -> Self {
+		Self { expr: expr.into(), info }
 	}
 }
 
-impl fmt::Display for S {
+impl fmt::Display for Node {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		write!(f, "{}", self.expr)
+	}
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Expr {
+	Rec {
+		name: Rc<str>,
+		fields: Vec<TypedIdent>,
+	},
+	Fun {
+		name: Rc<str>,
+		params: Vec<TypedIdent>,
+		rtype: Option<ValueType>,
+		body: Vec<Node>,
+	},
+	Var {
+		name: Rc<str>,
+		vtype: Option<ValueType>,
+		body: Node,
+	},
+	If {
+		cond: Node,
+		bt: Vec<Node>,
+		bf: Vec<Node>,
+	},
+	While {
+		cond: Node,
+		body: Vec<Node>,
+	},
+	Assign {
+		name: Rc<str>,
+		body: Node,
+	},
+	Num(i64),
+	Id(Rc<str>),
+	Block(Vec<Node>),
+	Unary {
+		op: UnaryOp,
+		rhs: Node,
+	},
+	Binary {
+		op: BinaryOp,
+		lhs: Node,
+		rhs: Node,
+	},
+	FnCall {
+		name: Rc<str>,
+		args: Vec<Node>,
+	},
+}
+
+impl Node {
+	pub(crate) fn new_while(cond: Node, body: Vec<Node>, info: TokenInfo) -> Self {
+		Self::new(Expr::While { cond, body }, info)
+	}
+
+	pub(crate) fn new_block(b: Vec<Node>, info: TokenInfo) -> Self {
+		Self::new(Expr::Block(b), info)
+	}
+
+	pub(crate) fn new_if(cond: Node, bt: Vec<Node>, bf: Vec<Node>, info: TokenInfo) -> Self {
+		Self::new(Expr::If { cond, bt, bf }, info)
+	}
+
+	pub(crate) fn new_unary(op: UnaryOp, rhs: Node, info: TokenInfo) -> Self {
+		Self::new(Expr::Unary { op, rhs }, info)
+	}
+
+	pub(crate) fn new_binary(op: BinaryOp, lhs: Node, rhs: Node, info: TokenInfo) -> Self {
+		Self::new(Expr::Binary { op, lhs, rhs }, info)
+	}
+
+	pub(crate) fn new_var(
+		name: Rc<str>,
+		vtype: Option<ValueType>,
+		body: Node,
+		info: TokenInfo,
+	) -> Self {
+		Self::new(Expr::Var { name, vtype, body }, info)
+	}
+
+	pub(crate) fn new_fun(
+		name: Rc<str>,
+		params: Vec<TypedIdent>,
+		rtype: Option<ValueType>,
+		body: Vec<Node>,
+		info: TokenInfo,
+	) -> Self {
+		Self::new(Expr::Fun { name, params, rtype, body }, info)
+	}
+
+	pub(crate) fn new_assign(name: Rc<str>, body: Node, info: TokenInfo) -> Self {
+		Self::new(Expr::Assign { name, body }, info)
+	}
+
+	pub(crate) fn new_call(name: Rc<str>, args: Vec<Node>, info: TokenInfo) -> Self {
+		Self::new(Expr::FnCall { name, args }, info)
+	}
+}
+
+impl fmt::Display for Expr {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+		fn show<T>(list: &[T], f: fn(&T) -> String) -> String {
+				list.iter()
+					.map(f)
+					.collect::<Vec<_>>()
+					.join(", ")
+		}
+
 		match self {
-			S::Num(n,_)               => write!(fmt, "{n}"),
-			S::Id(s,_)                => write!(fmt, "{s}"),
-			S::Block(b,_)             => write!(fmt, "{b}"),
-			S::If(cond,bt,Some(bf),_) => write!(fmt, "(if {cond} {bt} else {bf})"),
-			S::If(cond,bt,None,_)     => write!(fmt, "(if {cond} {bt})"),
-			S::Unary(op,s,_)          => write!(fmt, "({op} {s})"),
-			S::Binary(op,s0,s1,_)     => write!(fmt, "({op} {s0} {s1})"),
-			S::FnCall(name,list,_)    => write!(fmt, "{name}({})",
-				list.iter().fold(String::with_capacity(list.len()), |mut acc,t| {
-					acc.push_str(&t.to_string());
-					acc.push(' ');
-					acc
-				}).trim(),
-			),
+			Expr::Rec { name, fields }    => write!(fmt, "(rec {name} {})",
+				show(fields, |(s,vt)| format!("{s}: {vt}"))),
+			Expr::While { cond, body }    => write!(fmt, "(while {cond} {body:?})"),
+			Expr::Assign { name, body }   => write!(fmt, "({name} = {body})"),
+			Expr::Num(n)                  => write!(fmt, "{n}"),
+			Expr::Id(s)                   => write!(fmt, "{s}"),
+			Expr::Block(b)                => write!(fmt, "{b:?}"),
+			Expr::Unary { op, rhs }       => write!(fmt, "({op} {rhs})"),
+			Expr::Binary { op, lhs, rhs } => write!(fmt, "({op} {lhs} {rhs})"),
+			Expr::Fun { name, params, rtype, body } => {
+				write!(fmt, "(fn {name} ({})", show(params, |(s,vt)| format!("{s}: {vt}")))?;
+				if let Some(rt) = rtype {
+					write!(fmt, " -> {rt}")?;
+				}
+				write!(fmt, " {body:?})")
+			}
+			Expr::Var { name, vtype, body } => {
+				write!(fmt, "(var {name}")?;
+				if let Some(vt) = vtype {
+					write!(fmt, ": {vt}")?;
+				}
+				write!(fmt, " = {body})")
+			}
+			Expr::If { cond, bt, bf } => write!(fmt, "(if {cond} {bt:?} {bf:?})"),
+			Expr::FnCall { name, args } => write!(fmt, "{name}({args:?})"),
 		}
 	}
 }
@@ -361,7 +423,7 @@ impl fmt::Display for S {
 pub fn eval(
 	source: &str,
 	input: Vec<Token>,
-) -> miette::Result<Vec<Stmt>> {
+) -> miette::Result<Vec<Node>> {
 	if input.len() == 0 {
 		miette::bail!("Empty input");
 	}
@@ -547,93 +609,9 @@ fn ident_typed(
 	Ok((id, val_type))
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Block(pub(crate) Vec<Stmt>, pub(crate) Option<S>);
-
-impl fmt::Display for Block {
-	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-		write!(fmt, "[{}]", self.0.iter().map(|s| format!("{s}")).collect::<Vec<_>>().join(","))?;
-		if let Some(s) = &self.1 {
-			write!(fmt, "->{s}")?;
-		}
-		Ok(())
-	}
-}
-
-impl Block {
-	fn new(list: Vec<Stmt>, s: Option<S>) -> Self {
-		Self(list, s)
-	}
-
-	#[allow(dead_code)]
-	fn expr(s: S) -> Self {
-		Self(vec![], Some(s))
-	}
-
-	#[allow(dead_code)]
-	fn stmts(stmts: Vec<Stmt>) -> Self {
-		Self(stmts, None)
-	}
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Stmt {
-	Rec {
-		name: Rc<str>,
-		fields: Vec<TypedIdent>,
-	},
-	Fun {
-		name: Rc<str>,
-		params: Vec<TypedIdent>,
-		rtype: Option<ValueType>,
-		body: Block,
-	},
-	Var {
-		name: Rc<str>,
-		vtype: Option<ValueType>,
-		body: S,
-	},
-	If {
-		cond: S,
-		bt: Block,
-		bf: Option<Block>,
-	},
-	While {
-		cond: S,
-		body: Block,
-	},
-	Assign {
-		referent: Rc<str>,
-		body: S,
-	}
-}
-
-impl fmt::Display for Stmt {
-	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-		fn show(list: &[TypedIdent]) -> String {
-				list.iter()
-					.map(|(s,vt)| format!("{s}:{vt}"))
-					.collect::<Vec<_>>()
-					.join(",")
-		}
-
-		match self {
-			Self::Rec { name, fields } => write!(fmt, "(Rec {name} {})", show(fields)),
-			Self::Fun { name, params, rtype: Some(rt), body } => write!(fmt, "(Fn {name} ({}) -> {rt} {body})", show(params)),
-			Self::Fun { name, params, rtype: None, body } => write!(fmt, "(Fn {name} ({}) {body})", show(params)),
-			Self::Var { name, vtype: Some(vt), body } => write!(fmt, "(Var {name}: {vt} = {body})"),
-			Self::Var { name, vtype: None, body } => write!(fmt, "(Var {name} = {body})"),
-			Self::If { cond, bt, bf: Some(b) } => write!(fmt, "(If {cond} {bt} else {b})"),
-			Self::If { cond, bt, bf: None } => write!(fmt, "(If {cond} {bt})"),
-			Self::While { cond, body } => write!(fmt, "(While {cond} [{body}])"),
-			Self::Assign { referent, body } => write!(fmt, "({referent} = {body})"),
-		}
-	}
-}
-
 /// args := (expr (',' expr)* ','?)?
 #[instrument(skip(parser))]
-fn args<'a>(parser: &mut Parser<'a,'_>) -> Option<Vec<S>> {
+fn args<'a>(parser: &mut Parser<'a,'_>) -> Option<Vec<Node>> {
 	let first = expr(parser, 0)
 		.ok()?;
 	let mut out = vec![first];
@@ -650,13 +628,13 @@ fn args<'a>(parser: &mut Parser<'a,'_>) -> Option<Vec<S>> {
 #[instrument(skip(parser))]
 fn prefix_binding_power(
 	parser: &mut Parser,
-) -> miette::Result<((),u8)> {
+) -> miette::Result<u8> {
 	use TokenType as TT;
 
 	match parser.peek(0).tt {
-		TT::Plus | TT::Minus => Ok(((),11)),
-		TT::Dollar | TT::At => Ok(((),13)),
-		TT::Bang => Ok(((),15)),
+		TT::Plus | TT::Minus => Ok(11),
+		TT::Dollar | TT::At => Ok(13),
+		TT::Bang => Ok(15),
 		_ => error!(parser, "Expected 'Unary Operator'"),
 	}
 }
@@ -699,30 +677,81 @@ fn infix_binding_power(tt: &TokenType) -> Option<(u8,u8)> {
 	}
 }
 
+/// statement := rec | fn | var | if | while | ident
+fn statement<'a>(
+	parser: &mut Parser<'a,'_>,
+) -> miette::Result<Node> {
+	match parser.peek(0).tt {
+		TokenType::Rec      => stmt_rec(parser),
+		TokenType::Fun      => stmt_fn(parser),
+		TokenType::Var      => stmt_var(parser),
+		TokenType::If       => stmt_if(parser),
+		TokenType::While    => stmt_while(parser),
+		TokenType::Ident(_) => stmt_assign(parser),
+		_ => error!(parser, "Statement"),
+	}
+}
+
+/// expr_if := expr block ('else' block)?
+#[instrument(skip(parser))]
+fn expr_if<'a>(
+	parser: &mut Parser<'a,'_>,
+) -> miette::Result<(Node,Vec<Node>,Vec<Node>)> {
+	let cond = expr(parser, 0)?;
+	let bt = block(parser)?;
+	let bf = match_token(parser, TokenType::Else)
+		.and_then(|_| block(parser))
+		.unwrap_or_default();
+	Ok((cond, bt, bf))
+}
+
+/// if := 'if' expr_if
+#[instrument(skip(parser))]
+fn stmt_if<'a>(
+	parser: &mut Parser<'a,'_>,
+) -> miette::Result<Node> {
+	let start = parser.peek(0).range().start;
+	match_token(parser, TokenType::If)?;
+	let (cond, bt, bf) = expr_if(parser)?;
+	let end = parser.peek(-1).range().end;
+	Ok(Node::new_if(cond, bt, bf, start..end))
+}
+
 #[instrument(skip(parser))]
 fn expr<'a>(
 	parser: &mut Parser<'a,'_>,
 	min_bp: u8,
-) -> miette::Result<S> {
+) -> miette::Result<Node> {
 	use TokenType as TT;
 
 	let left_token = parser.peek(0).clone();
 	let mut lhs = match left_token.tt {
+		TT::Rec => stmt_rec(parser)?,
+		TT::Fun => stmt_fn(parser)?,
+		TT::Var => stmt_var(parser)?,
+		TT::While => stmt_while(parser)?,
+
 		TT::Ident(ref s) => {
 			parser.index += 1;
-			S::Id(s.to_owned(), left_token.range())
+			Node {
+				expr: Expr::Id(s.to_owned()).into(),
+				info: left_token.range(),
+			}
 		}
 		TT::Number(ref n) => {
 			parser.index += 1;
-			S::Num(n.parse::<i64>().into_diagnostic()?, left_token.range())
+			Node {
+				expr: Expr::Num(n.parse::<i64>().into_diagnostic()?).into(),
+				info: left_token.range(),
+			}
 		}
 
 		TT::If => {
-			parser.index += 1;
 			let start = left_token.range().start;
+			parser.index += 1;
 			let (cond, bt, bf) = expr_if(parser)?;
 			let end = parser.peek(-1).range().end;
-			S::new_if(cond, bt, bf, start..end)
+			Node::new_if(cond, bt, bf, start..end)
 		}
 
 		TT::OParen => {
@@ -740,10 +769,10 @@ fn expr<'a>(
 		TT::Dollar |
 		TT::At |
 		TT::Bang => {
-			let ((),r_bp) = prefix_binding_power(parser)?;
+			let r_bp = prefix_binding_power(parser)?;
 			parser.index += 1;
 			let rhs = expr(parser, r_bp)?;
-			S::new_unary((&left_token.tt).try_into()?, rhs, left_token.range())
+			Node::new_unary((&left_token.tt).try_into()?, rhs, left_token.range())
 		}
 		TT::EOF => return error!(eof, parser,
 			"Identifier, Function Call, or Literal"),
@@ -767,25 +796,31 @@ fn expr<'a>(
 		}
 
 		if TT::OParen == op_token.tt {
-			let S::Id(s, range) = lhs else {
+			let Expr::Id(name) = *lhs.expr else {
 				return error!(parser, "Identifier");
 			};
 
 			parser.index += 1;
 			if TT::CParen == parser.peek(0).tt {
 				parser.index += 1;
-				lhs = S::FnCall(s, vec![], range.start..op_token.range().end);
+				lhs = Node {
+					expr: Expr::FnCall { name, args: vec![] }.into(),
+					info: lhs.info.start..op_token.range().end,
+				};
 				continue;
 			}
 
-			let Some(rhs) = args(parser) else {
+			let Some(args) = args(parser) else {
 				return error!(parser, "Argument List");
 			};
 			if TT::CParen != parser.peek(0).tt {
 				return error!(parser, ")");
 			}
 			parser.index += 1;
-			lhs = S::FnCall(s, rhs, range.start..op_token.range().end);
+			lhs = Node {
+				expr: Expr::FnCall { name, args }.into(),
+				info: lhs.info.start..op_token.range().end,
+			};
 			continue;
 		}
 
@@ -797,7 +832,7 @@ fn expr<'a>(
 			parser.index += 1;
 			let op: BinaryOp = (&op_token.tt).try_into()?;
 			let rhs = expr(parser, r_bp)?;
-			lhs = S::new_binary(op, lhs, rhs, op_token.range());
+			lhs = Node::new_binary(op, lhs, rhs, op_token.range());
 			continue;
 		}
 
@@ -826,35 +861,40 @@ fn params(
 #[instrument(skip(parser))]
 fn block(
 	parser: &mut Parser,
-) -> miette::Result<Block> {
+) -> miette::Result<Vec<Node>> {
 	match_token(parser, TokenType::OBrace)?;
 	let mut body = Vec::new();
 	while let Ok(stmt) = statement(parser) {
 		body.push(stmt);
 	}
-	let output = expr(parser, 0).ok();
+	if let Ok(output) = expr(parser, 0) {
+		body.push(output);
+	}
 	match_token(parser, TokenType::CBrace)?;
-	Ok(Block::new(body, output))
+	Ok(body)
 }
 
 /// rec := 'rec' ident '{' params '}'
 #[instrument(skip(parser))]
 fn stmt_rec(
 	parser: &mut Parser,
-) -> miette::Result<Stmt> {
+) -> miette::Result<Node> {
+	let start = parser.peek(0).range().start;
 	match_token(parser, TokenType::Rec)?;
 	let name = ident(parser)?;
 	match_token(parser, TokenType::OBrace)?;
 	let fields = params(parser)?;
 	match_token(parser, TokenType::CBrace)?;
-	Ok(Stmt::Rec { name, fields })
+	let end = parser.peek(-1).range().end;
+	Ok(Node::new(Expr::Rec { name, fields }, start..end))
 }
 
 /// fn := 'fn' ident '(' params ')' ('->' value_type)? block
 #[instrument(skip(parser))]
 fn stmt_fn(
 	parser: &mut Parser,
-) -> miette::Result<Stmt> {
+) -> miette::Result<Node> {
+	let start = parser.peek(0).range().start;
 	match_token(parser, TokenType::Fun)?;
 	let name = ident(parser)?;
 	match_token(parser, TokenType::OParen)?;
@@ -864,97 +904,66 @@ fn stmt_fn(
 		.and_then(|_| value_type(parser))
 		.ok();
 	let body = block(parser)?;
-	Ok(Stmt::Fun { name, params, rtype, body })
+	let end = parser.peek(-1).range().end;
+	Ok(Node::new(Expr::Fun { name, params, rtype, body }, start..end))
 }
 
 /// var := 'var' ident (':' value_type)? '=' (block | expr)
 #[instrument(skip(parser))]
 fn stmt_var<'a>(
 	parser: &mut Parser<'a,'_>,
-) -> miette::Result<Stmt> {
+) -> miette::Result<Node> {
+	let start = parser.peek(0).range().start;
 	match_token(parser, TokenType::Var)?;
 	let name = ident(parser)?;
 	let vtype = match_token(parser, TokenType::Colon)
 		.and_then(|_| value_type(parser))
 		.ok();
 	match_token(parser, TokenType::Eq1)?;
-	let start = parser.peek(0).range().start;
+	let body_start = parser.peek(0).range().start;
 	let body = block(parser)
-		.map(|b| S::new_block(b, start..parser.peek(-1).range().end))
+		.map(|b| Node::new_block(b, body_start..parser.peek(-1).range().end))
 		.or_else(|_| expr(parser, 0))?;
-	Ok(Stmt::Var { name, vtype, body })
-}
-
-/// expr_if := expr block ('else' block)?
-#[instrument(skip(parser))]
-fn expr_if<'a>(
-	parser: &mut Parser<'a,'_>,
-) -> miette::Result<(S,Block,Option<Block>)> {
-	let cond = expr(parser, 0)?;
-	let bt = block(parser)?;
-	let bf = match_token(parser, TokenType::Else)
-		.and_then(|_| block(parser))
-		.ok();
-	Ok((cond, bt, bf))
-}
-
-/// if := 'if' expr_if
-#[instrument(skip(parser))]
-fn stmt_if<'a>(
-	parser: &mut Parser<'a,'_>,
-) -> miette::Result<Stmt> {
-	match_token(parser, TokenType::If)?;
-	let (cond, bt, bf) = expr_if(parser)?;
-	Ok(Stmt::If { cond, bt, bf })
+	let end = parser.peek(-1).range().end;
+	Ok(Node::new(Expr::Var { name, vtype, body }, start..end))
 }
 
 /// while := 'while' expr block
 #[instrument(skip(parser))]
 fn stmt_while<'a>(
 	parser: &mut Parser<'a,'_>,
-) -> miette::Result<Stmt> {
+) -> miette::Result<Node> {
+	let start = parser.peek(0).range().start;
 	match_token(parser, TokenType::While)?;
 	let cond = expr(parser, 0)?;
 	let body = block(parser)?;
-	Ok(Stmt::While { cond, body })
+	let end = parser.peek(-1).range().end;
+	Ok(Node::new_while(cond, body, start..end))
 }
 
 /// assign := ident '=' (block | expr)
 #[instrument(skip(parser))]
 fn stmt_assign<'a>(
 	parser: &mut Parser<'a,'_>,
-) -> miette::Result<Stmt> {
+) -> miette::Result<Node> {
+	let start = parser.peek(0).range().start;
 	if !matches!(parser.peek(0).tt, TokenType::Ident(_)) || parser.peek(1).tt != TokenType::Eq1 {
 		return error!(parser, "Assignment");
 	}
-	let referent = ident(parser)?;
+	let name = ident(parser)?;
 	parser.index += 1;
-	let start = parser.peek(0).range().start;
+	let body_start = parser.peek(0).range().start;
 	let body = block(parser)
-		.map(|b| S::new_block(b, start..parser.peek(-1).range().end))
+		.map(|b| Node::new_block(b, body_start..parser.peek(-1).range().end))
 		.or_else(|_| expr(parser, 0))?;
-	Ok(Stmt::Assign { referent, body })
-}
-
-/// statement := rec | fn | var | if | while | ident
-fn statement<'a>(
-	parser: &mut Parser<'a,'_>,
-) -> miette::Result<Stmt> {
-	match parser.peek(0).tt {
-		TokenType::Rec      => stmt_rec(parser),
-		TokenType::Fun      => stmt_fn(parser),
-		TokenType::Var      => stmt_var(parser),
-		TokenType::If       => stmt_if(parser),
-		TokenType::While    => stmt_while(parser),
-		TokenType::Ident(_) => stmt_assign(parser),
-		_ => error!(parser, "Statement"),
-	}
+	let end = parser.peek(-1).range().end;
+	Ok(Node::new(Expr::Assign { name, body }, start..end))
 }
 
 /// program := statement*
 fn program<'a>(
 	parser: &mut Parser<'a,'_>,
-) -> miette::Result<Vec<Stmt>> {
+) -> miette::Result<Vec<Node>> {
 	let mut program = Vec::default();
 	while parser.peek(0).tt != TokenType::EOF {
 		program.push(statement(parser)?);
@@ -966,35 +975,52 @@ fn program<'a>(
 mod test {
 	use crate::parser::{
 		BinaryOp,
-		Block,
-		S,
-		Stmt,
+		Expr,
+		Node,
 		TypedIdent,
 		UnaryOp,
 		ValueType as VT,
 	};
 
-	fn num(n: i64) -> S {
-		S::Num(n, 0..0)
+	fn num(n: i64) -> Node {
+		Node {
+			expr: Expr::Num(n).into(),
+			info: 0..0,
+		}
 	}
 
-	fn ident(s: &str) -> S {
-		S::Id(s.into(), 0..0)
+	fn ident(s: &str) -> Node {
+		Node {
+			expr: Expr::Id(s.into()).into(),
+			info: 0..0,
+		}
 	}
 
-	fn unary(op: UnaryOp, s: S) -> S {
-		S::new_unary(op, s, 0..0)
+	fn unary(op: UnaryOp, rhs: Node) -> Node {
+		Node {
+			expr: Expr::Unary { op, rhs }.into(),
+			info: 0..0,
+		}
 	}
 
-	fn binary(op: BinaryOp, s0: S, s1: S) -> S {
-		S::new_binary(op, s0, s1, 0..0)
+	fn binary(op: BinaryOp, lhs: Node, rhs: Node) -> Node {
+		Node {
+			expr: Expr::Binary { op, lhs, rhs }.into(),
+			info: 0..0,
+		}
 	}
 
-	fn fn_call(name: &str, s: &[S]) -> S {
-		S::FnCall(name.into(), s.to_vec(), 0..0)
+	fn fn_call(name: &str, s: &[Node]) -> Node {
+		Node {
+			expr: Expr::FnCall {
+				name: name.into(),
+				args: s.to_vec(),
+			}.into(),
+			info: 0..0,
+		}
 	}
 
-	fn expr_test(input: &str, s: S) -> miette::Result<()> {
+	fn expr_test(input: &str, s: Node) -> miette::Result<()> {
 		use crate::parser::{Parser, expr};
 		use crate::lexer::eval;
 
@@ -1010,12 +1036,15 @@ mod test {
 	fn var_s(
 		name: &str,
 		vtype: Option<VT>,
-		body: S,
-	) -> Stmt {
-		Stmt::Var {
-			name: name.into(),
-			vtype,
-			body,
+		body: Node,
+	) -> Node {
+		Node {
+			expr: Expr::Var {
+				name: name.into(),
+				vtype,
+				body,
+			}.into(),
+			info: 0..0,
 		}
 	}
 
@@ -1023,49 +1052,70 @@ mod test {
 		name: &str,
 		params: &[TypedIdent],
 		rtype: Option<VT>,
-		body: &[Stmt],
-		output: Option<S>,
-	) -> Stmt {
-		Stmt::Fun {
-			name: name.into(),
-			params: params.to_vec(),
-			rtype,
-			body: Block::new(body.to_vec(),	output),
+		body: &[Node],
+	) -> Node {
+		Node {
+			expr: Expr::Fun {
+				name: name.into(),
+				params: params.to_vec(),
+				rtype,
+				body: body.to_vec()
+			}.into(),
+			info: 0..0,
 		}
 	}
 
 	fn rec_s(
 		name: &str,
 		fields: &[TypedIdent],
-	) -> Stmt {
-		Stmt::Rec {
-			name: name.into(),
-			fields: fields.to_vec(),
+	) -> Node {
+		Node {
+			expr: Expr::Rec {
+				name: name.into(),
+				fields: fields.to_vec(),
+			}.into(),
+			info: 0..0,
 		}
 	}
 
 	fn if_s(
-		cond: S,
-		bt: Block,
-		bf: Option<Block>,
-	) -> Stmt {
-		Stmt::If { cond, bt, bf }
+		cond: Node,
+		bt: &[Node],
+		bf: &[Node],
+	) -> Node {
+		Node {
+			expr: Expr::If {
+				cond,
+				bt: bt.to_vec(),
+				bf: bf.to_vec(),
+			}.into(),
+			info: 0..0,
+		}
 	}
 
 	fn while_s(
-		cond: S,
-		body: Block,
-	) -> Stmt {
-		Stmt::While { cond, body }
+		cond: Node,
+		body: &[Node],
+	) -> Node {
+		Node {
+			expr: Expr::While {
+				cond,
+				body: body.to_vec(),
+			}.into(),
+			info: 0..0,
+		}
 	}
 
 	fn assign_s(
-		referent: &str,
-		body: S,
-	) -> Stmt {
-		Stmt::Assign {
-			referent: referent.into(),
-			body,
+		name: &str,
+		body: Node,
+	) -> Node {
+		Node {
+			expr: Expr::Assign {
+				name: name.into(),
+				body,
+			}.into(),
+			info: 0..0,
 		}
 	}
 
@@ -1116,7 +1166,7 @@ mod test {
 
 	fn parse_test(
 		input: &str,
-		stmts: &[Stmt],
+		stmts: &[Node],
 	) -> miette::Result<()> {
 		use crate::parser;
 		use crate::lexer;
@@ -1192,7 +1242,7 @@ mod test {
 	#[test]
 	fn fn_stmt() -> miette::Result<()> {
 		parse_test("fn a() {}", &[
-			fn_s("a", &[], None, &[], None),
+			fn_s("a", &[], None, &[]),
 		])
 	}
 
@@ -1204,21 +1254,21 @@ mod test {
 				("c".into(), VT::S16),
 				("d".into(), VT::F16(6)),
 				("e".into(), VT::F32(10)),
-			], None, &[], None),
+			], None, &[]),
 		])
 	}
 
 	#[test]
 	fn fn_stmt_rtype_simple() -> miette::Result<()> {
 		parse_test("fn a() -> u8 {}", &[
-			fn_s("a", &[], Some(VT::U8), &[], None)
+			fn_s("a", &[], Some(VT::U8), &[])
 		])
 	}
 
 	#[test]
 	fn fn_stmt_rtype_udt() -> miette::Result<()> {
 		parse_test("fn a() -> b {}", &[
-			fn_s("a", &[], Some(VT::UDT("b".to_string())), &[], None)
+			fn_s("a", &[], Some(VT::UDT("b".to_string())), &[])
 		])
 	}
 
@@ -1232,7 +1282,8 @@ mod test {
 			fn_s("a", &[], None, &[
 				var_s("b", None, num(1)),
 				var_s("c", None, num(2)),
-			], Some(binary(BinaryOp::Add, ident("b"), ident("c"))))
+				binary(BinaryOp::Add, ident("b"), ident("c")),
+			]),
 		])
 	}
 
@@ -1268,8 +1319,8 @@ mod test {
 		parse_test("if a > b {a}", &[
 			if_s(
 				binary(BinaryOp::CmpGT, ident("a"), ident("b")),
-				Block::expr(ident("a")),
-				None,
+				&[ident("a")],
+				&[],
 			)
 		])
 	}
@@ -1279,8 +1330,8 @@ mod test {
 		parse_test("if a < b {a} else {b}", &[
 			if_s(
 				binary(BinaryOp::CmpLT, ident("a"), ident("b")),
-				Block::expr(ident("a")),
-				Some(Block::expr(ident("b"))),
+				&[ident("a")],
+				&[ident("b")],
 			)
 		])
 	}
@@ -1290,7 +1341,7 @@ mod test {
 		parse_test("while a == b {b}", &[
 			while_s(
 				binary(BinaryOp::CmpEq, ident("a"), ident("b")),
-				Block::expr(ident("b")),
+				&[ident("b")],
 			)
 		])
 	}

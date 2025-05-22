@@ -3,17 +3,17 @@ use std::ops::Range;
 
 use tracing::warn;
 
-use crate::parser::{BinaryOp, Block, S, Stmt, UnaryOp};
+use crate::parser::{BinaryOp, Expr, Node, UnaryOp};
 
 pub(crate) fn eval(
-	ast: Vec<Stmt>,
+	ast: Vec<Node>,
 	mut limit: u32,
-) -> Vec<Stmt> {
+) -> Vec<Node> {
 	let mut prev = ast;
 	loop {
 		let out = prev.iter()
 			.cloned()
-			.map(stmt)
+			.map(expr)
 			.collect();
 		if out == prev {
 			break out;
@@ -27,223 +27,184 @@ pub(crate) fn eval(
 	}
 }
 
-fn stmt(
-	stmt: Stmt,
-) -> Stmt {
-	match stmt {
-		Stmt::If { cond, bt, bf } => Stmt::If {
-			cond,
-			bt: block(bt),
-			bf: bf.map(block),
-		},
-		Stmt::While { cond, body } => Stmt::While {
-			cond,
-			body: block(body),
-		},
-		Stmt::Var { name, vtype, body } => Stmt::Var {
-			name,
-			vtype,
-			body: expr(body),
-		},
-		rec @ Stmt::Rec {..} => rec,
-		Stmt::Fun { name, params, rtype, body } => Stmt::Fun {
+fn expr(s: Node) -> Node {
+	match *s.expr {
+		Expr::If { cond, bt, bf } => Node::new_if(expr(cond), reduce_list(bt), reduce_list(bf), s.info),
+		Expr::While { cond, body } => Node::new_while(expr(cond), reduce_list(body), s.info),
+		Expr::Var { name, vtype, body } => Node::new_var(name, vtype, expr(body), s.info),
+		Expr::Rec {..} => s,
+		Expr::Fun { name, params, rtype, body } => Node::new_fun(
 			name,
 			params,
 			rtype,
-			body: block(body),
-		},
-		Stmt::Assign { referent, body } => Stmt::Assign {
-			referent,
-			body: expr(body),
-		},
-	}
-}
-
-fn expr(s: S) -> S {
-	match s {
-		S::Num(n, info) => S::Num(n, info),
-		S::Id(s, info) => S::Id(s, info),
-		S::Block(b,info) => S::new_block(block(*b), info),
-		S::If(cond, bt, Some(bf), info) => S::new_if(
-			expr(*cond),
-			block(*bt),
-			Some(block(*bf)),
-			info,
+			reduce_list(body),
+			s.info,
 		),
-		S::If(cond, bt, None, info) => S::new_if(
-			expr(*cond),
-			block(*bt),
-			None,
-			info,
-		),
-		S::Unary(op, s, info) => unary(op, expr(*s), info),
-		S::Binary(op, s0, s1, info) => binary(op, expr(*s0), expr(*s1), info),
-		S::FnCall(name, list, info) => S::FnCall(
+		Expr::Assign { name, body } => Node::new_assign(name, expr(body), s.info),
+		Expr::Num(_) => s,
+		Expr::Id(_) => s,
+		Expr::Block(b) => Node::new_block(reduce_list(b), s.info),
+		Expr::Unary { op, rhs } => unary(op, expr(rhs), s.info),
+		Expr::Binary { op, lhs, rhs } => binary(op, expr(lhs), expr(rhs), s.info),
+		Expr::FnCall { name, args } => Node::new_call(
 			name,
-			list.into_iter()
-				.map(expr)
-				.collect(),
-			info,
+			reduce_list(args),
+			s.info,
 		),
 	}
 }
 
-fn block(
-	Block(stmts, opt_expr): Block,
-) -> Block {
-	Block(
-		stmts.into_iter().map(stmt).collect(),
-		opt_expr.map(expr),
-	)
+fn reduce_list(nodes: Vec<Node>) -> Vec<Node> {
+	nodes.into_iter().map(expr).collect()
 }
 
-fn unary(op: UnaryOp, s: S, info: Range<usize>) -> S {
+fn unary(op: UnaryOp, s: Node, info: Range<usize>) -> Node {
 	match op {
-		UnaryOp::Neg => if let S::Num(n, info) = s {
-			S::Num(-n, info.start-1..info.end)
+		UnaryOp::Neg => if let Expr::Num(n) = *s.expr {
+			Node::new(Expr::Num(-n), info)
 		} else {
-			S::new_unary(op, s, info)
+			Node::new_unary(op, s, info)
 		}
-		UnaryOp::Not => if let S::Num(n, info) = s {
-			S::Num(!n, info.start-1..info.end)
+		UnaryOp::Not => if let Expr::Num(n) = *s.expr {
+			Node::new(Expr::Num(!n), info)
 		} else {
-			S::new_unary(op, s, info)
+			Node::new_unary(op, s, info)
 		}
 		UnaryOp::Pos => s,
 		UnaryOp::Deref |
-		UnaryOp::Ref => S::new_unary(op, s, info),
+		UnaryOp::Ref => Node::new_unary(op, s, info),
 	}
 }
 
 fn collapse_binop(
 	f: fn(i64,i64) -> i64,
 	op: BinaryOp,
-	s0: S,
-	s1: S,
+	lhs: Node,
+	rhs: Node,
 	info: Range<usize>,
-) -> S {
-	match (s0, s1) {
-		(S::Num(n0,i0), S::Num(n1,i1)) => S::Num(f(n0,n1), i0.start..i1.end),
-		(s_0,s_1) => S::new_binary(op, s_0, s_1, info),
+) -> Node {
+	match (*lhs.expr, *rhs.expr) {
+		(Expr::Num(n0), Expr::Num(n1)) => Node::new(Expr::Num(f(n0,n1)), info),
+		(lex, rex) => Node::new_binary(
+			op,
+			Node::new(lex, lhs.info),
+			Node::new(rex, rhs.info),
+			info,
+		),
 	}
 }
 
-fn binary(op: BinaryOp, s0: S, s1: S, info: Range<usize>) -> S {
+fn binary(op: BinaryOp, lhs: Node, rhs: Node, info: Range<usize>) -> Node {
 	match op {
-		BinaryOp::Add => match (s0, s1) {
-			(S::Num(n0,i0), S::Num(n1,i1)) => S::Num(n0 + n1, i0.start..i1.end),
-			(s_0, S::Num(n1,i1)) => if let S::Binary(BinaryOp::Add, s00, s01, i0) = s_0 {
-				// ((s00 + s01) + s1)
-				match (*s00, *s01) {
-					(S::Num(n00,i00), s_01) => S::new_binary(
+		BinaryOp::Add => match ((*lhs.expr).clone(), (*rhs.expr).clone()) {
+			(Expr::Num(n0), Expr::Num(n1)) => Node { expr: Expr::Num(n0 + n1).into(), info },
+			(s_0, Expr::Num(n1)) => if let Expr::Binary { op: BinaryOp::Add, lhs: lhs0, rhs: lhs1 } = s_0 {
+				// ((lhs0 + lhs1) + rhs)
+				match (*lhs0.expr, *lhs1.expr) {
+					(Expr::Num(n00), s_01) => Node::new_binary(
 						BinaryOp::Add,
-						s_01,
-						S::Num(n00 + n1, i00.start..i1.end),
+						Node::new(s_01, lhs1.info),
+						Node::new(Expr::Num(n00 + n1), lhs0.info.start..rhs.info.end),
 						info,
 					),
-					(s_00, S::Num(n01,i01)) => S::new_binary(
+					(s_00, Expr::Num(n01)) => Node::new_binary(
 						BinaryOp::Add,
-						s_00,
-						S::Num(n01 + n1, i01.start..i1.end),
+						Node::new(s_00, lhs0.info),
+						Node::new(Expr::Num(n01 + n1), lhs1.info.start..rhs.info.end),
 						info,
 					),
-					(s_00, s_01) => S::new_binary(
-						BinaryOp::Add,
-						S::new_binary(BinaryOp::Add, s_00, s_01, i0),
-						S::Num(n1,i1),
-						info,
-					),
+					_ => Node::new_binary(BinaryOp::Add, lhs, rhs, info),
 				}
 			} else {
-				S::new_binary(BinaryOp::Add, s_0, S::Num(n1,i1), info)
+				Node::new_binary(op, lhs, rhs, info)
 			}
-			(s_0, s_1) => S::new_binary(op, s_0, s_1, info),
+			_ => Node::new_binary(op, lhs, rhs, info),
 		}
 		BinaryOp::AndB =>
-			collapse_binop(|n0,n1| n0 & n1, op, s0, s1, info),
+			collapse_binop(|n0,n1| n0 & n1, op, lhs, rhs, info),
 		BinaryOp::AndL =>
-			collapse_binop(|n0,n1| (n0 != 0 && n1 != 0) as i64, op, s0, s1, info),
+			collapse_binop(|n0,n1| (n0 != 0 && n1 != 0) as i64, op, lhs, rhs, info),
 		BinaryOp::CmpEq =>
-			collapse_binop(|n0,n1| (n0 == n1) as i64, op, s0, s1, info),
+			collapse_binop(|n0,n1| (n0 == n1) as i64, op, lhs, rhs, info),
 		BinaryOp::CmpGE =>
-			collapse_binop(|n0,n1| (n0 >= n1) as i64, op, s0, s1, info),
+			collapse_binop(|n0,n1| (n0 >= n1) as i64, op, lhs, rhs, info),
 		BinaryOp::CmpGT =>
-			collapse_binop(|n0,n1| (n0 > n1) as i64, op, s0, s1, info),
+			collapse_binop(|n0,n1| (n0 > n1) as i64, op, lhs, rhs, info),
 		BinaryOp::CmpLE =>
-			collapse_binop(|n0,n1| (n0 <= n1) as i64, op, s0, s1, info),
+			collapse_binop(|n0,n1| (n0 <= n1) as i64, op, lhs, rhs, info),
 		BinaryOp::CmpLT =>
-			collapse_binop(|n0,n1| (n0 < n1) as i64, op, s0, s1, info),
+			collapse_binop(|n0,n1| (n0 < n1) as i64, op, lhs, rhs, info),
 		BinaryOp::CmpNE =>
-			collapse_binop(|n0,n1| (n0 != n1) as i64, op, s0, s1, info),
+			collapse_binop(|n0,n1| (n0 != n1) as i64, op, lhs, rhs, info),
 		BinaryOp::Div =>
-			collapse_binop(|n0,n1| n0 / n1, op, s0, s1, info),
+			collapse_binop(|n0,n1| n0 / n1, op, lhs, rhs, info),
 		BinaryOp::LShift =>
-			collapse_binop(|n0,n1| n0 << n1, op, s0, s1, info),
+			collapse_binop(|n0,n1| n0 << n1, op, lhs, rhs, info),
 		BinaryOp::Mod =>
-			collapse_binop(|n0,n1| n0 % n1, op, s0, s1, info),
+			collapse_binop(|n0,n1| n0 % n1, op, lhs, rhs, info),
 		BinaryOp::Mul =>
-			collapse_binop(|n0,n1| n0 * n1, op, s0, s1, info),
+			collapse_binop(|n0,n1| n0 * n1, op, lhs, rhs, info),
 		BinaryOp::OrB =>
-			collapse_binop(|n0,n1| n0 | n1, op, s0, s1, info),
+			collapse_binop(|n0,n1| n0 | n1, op, lhs, rhs, info),
 		BinaryOp::OrL =>
-			collapse_binop(|n0,n1| (n0 != 0 || n1 != 0) as i64, op, s0, s1, info),
+			collapse_binop(|n0,n1| (n0 != 0 || n1 != 0) as i64, op, lhs, rhs, info),
 		BinaryOp::RShift =>
-			collapse_binop(|n0,n1| n0 >> n1, op, s0, s1, info),
-		BinaryOp::Sub => match (s0, s1) {
-			(S::Num(n0,i0), S::Num(n1,i1)) => S::Num(n0 - n1, i0.start..i1.end),
-			(s_0, S::Num(n1,i1)) => S::new_binary(
+			collapse_binop(|n0,n1| n0 >> n1, op, lhs, rhs, info),
+		BinaryOp::Sub => match ((*lhs.expr).clone(), (*rhs.expr).clone()) {
+			(Expr::Num(n0), Expr::Num(n1)) => Node::new(Expr::Num(n0 - n1), info),
+			(_, Expr::Num(n1)) => Node::new_binary(
 				BinaryOp::Add,
-				s_0,
-				S::Num(-n1,i1),
+				lhs,
+				Node::new(Expr::Num(-n1),rhs.info),
 				info,
 			),
-			(s_0, s_1) => {
-				let i1 = s_1.info();
-				S::new_binary(
+			_ => {
+				let rinfo = rhs.info.clone();
+				Node::new_binary(
 					BinaryOp::Add,
-					s_0,
-					S::new_unary(UnaryOp::Neg, s_1, i1),
+					lhs,
+					Node::new_unary(UnaryOp::Neg, rhs, rinfo),
 					info,
 				)
 			}
 		}
 		BinaryOp::XorB =>
-			collapse_binop(|n0,n1| n0 ^ n1, op, s0, s1, info),
+			collapse_binop(|n0,n1| n0 ^ n1, op, lhs, rhs, info),
 		BinaryOp::XorL =>
-			collapse_binop(|n0,n1| ((n0 != 0) ^ (n1 != 0)) as i64, op, s0, s1, info),
+			collapse_binop(|n0,n1| ((n0 != 0) ^ (n1 != 0)) as i64, op, lhs, rhs, info),
 
 		BinaryOp::Accessor |
 		BinaryOp::Assign |
 		BinaryOp::Comma |
 		BinaryOp::DivMod |
-		BinaryOp::LFShift |
-		BinaryOp::RFShift => S::new_binary(op, s0, s1, info),
+		BinaryOp::LRot |
+		BinaryOp::RRot => Node::new_binary(op, lhs, rhs, info),
 	}
 }
 
 #[cfg(test)]
 mod collapses {
 	use crate::{lexer, parser, reducer};
-	use parser::{BinaryOp, S, Stmt, UnaryOp, ValueType};
+	use parser::{BinaryOp, Expr, Node, UnaryOp, ValueType};
 
-	fn id(s: &str) -> S {
-		S::Id(s.into(), 0..0)
+	fn id(s: &str) -> Node {
+		Node::new(Expr::Id(s.into()), 0..0)
 	}
 
-	fn num(n: i64) -> S {
-		S::Num(n, 0..0)
+	fn num(n: i64) -> Node {
+		Node::new(Expr::Num(n), 0..0)
 	}
 
-	fn binary(op: BinaryOp, a: S, b: S) -> S {
-		S::new_binary(op, a, b, 0..0)
+	fn binary(op: BinaryOp, a: Node, b: Node) -> Node {
+		Node::new_binary(op, a, b, 0..0)
 	}
 
-	fn unary(op: UnaryOp, a: S) -> S {
-		S::new_unary(op, a, 0..0)
+	fn unary(op: UnaryOp, a: Node) -> Node {
+		Node::new_unary(op, a, 0..0)
 	}
 
-	fn var(name: &str, vtype: Option<ValueType>, body: S) -> Stmt {
-		Stmt::Var { name: name.into(), vtype, body }
+	fn var(name: &str, vtype: Option<ValueType>, body: Node) -> Node {
+		Node::new(Expr::Var { name: name.into(), vtype, body }, 0..0)
 	}
 
 	#[test]

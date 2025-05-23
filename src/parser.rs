@@ -989,11 +989,7 @@ fn expr<'a>(
 			parser.index += 1;
 			if TT::CParen == parser.peek(0).tt {
 				parser.index += 1;
-				lhs = Node {
-					kind: ValueType::Any,
-					expr: Expr::FnCall { name, args: vec![] }.into(),
-					info: lhs.info.start..op_token.range().end,
-				};
+				lhs = Node::new_call(name, vec![], lhs.info.start..op_token.range().end);
 				continue;
 			}
 
@@ -1004,11 +1000,7 @@ fn expr<'a>(
 				return error!(parser, ")");
 			}
 			parser.index += 1;
-			lhs = Node {
-				kind: ValueType::Any,
-				expr: Expr::FnCall { name, args }.into(),
-				info: lhs.info.start..op_token.range().end,
-			};
+			lhs = Node::new_call(name, args, lhs.info.start..op_token.range().end);
 			continue;
 		}
 

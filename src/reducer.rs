@@ -31,7 +31,7 @@ fn expr(s: Node) -> Node {
 	match *s.expr {
 		Expr::If { cond, bt, bf } => Node::new_if(expr(cond), reduce_list(bt), reduce_list(bf), s.info),
 		Expr::While { cond, body } => Node::new_while(expr(cond), reduce_list(body), s.info),
-		Expr::Var { name, vtype, body } => Node::new_var(name, vtype, expr(body), s.info),
+		Expr::Var { name, body } => Node::new_var(name, s.kind, expr(body), s.info),
 		Expr::Rec {..} => s,
 		Expr::Fun { name, params, rtype, body } => Node::new_fun(
 			name,
@@ -46,11 +46,7 @@ fn expr(s: Node) -> Node {
 		Expr::Block(b) => Node::new_block(reduce_list(b), s.info),
 		Expr::Unary { op, rhs } => unary(op, expr(rhs), s.info),
 		Expr::Binary { op, lhs, rhs } => binary(op, expr(lhs), expr(rhs), s.info),
-		Expr::FnCall { name, args } => Node::new_call(
-			name,
-			reduce_list(args),
-			s.info,
-		),
+		Expr::FnCall { name, args } => Node::new_call(name, reduce_list(args), s.info),
 	}
 }
 
@@ -217,8 +213,7 @@ mod collapses {
 	}
 
 	fn var(name: &str, vtype: ValueType, body: Node) -> Node {
-		let kind = vtype.clone();
-		Node::new(Expr::Var { name: name.into(), vtype, body }, kind, 0..0)
+		Node::new(Expr::Var { name: name.into(), body }, vtype, 0..0)
 	}
 
 	#[test]

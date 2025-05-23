@@ -485,7 +485,6 @@ pub(crate) enum Expr {
 	},
 	Var {
 		name: Rc<str>,
-		vtype: ValueType,
 		body: Node,
 	},
 	If {
@@ -543,8 +542,7 @@ impl Node {
 		body: Node,
 		info: TokenInfo,
 	) -> Self {
-		let kind = vtype.clone();
-		Self::new(Expr::Var { name, vtype, body }, kind, info)
+		Self::new(Expr::Var { name, body }, vtype, info)
 	}
 
 	pub(crate) fn new_if(cond: Node, bt: Vec<Node>, bf: Vec<Node>, info: TokenInfo) -> Self {
@@ -600,7 +598,7 @@ impl fmt::Display for Expr {
 			Expr::Binary { op, lhs, rhs } => write!(fmt, "({op} {lhs} {rhs})"),
 			Expr::Fun { name, params, rtype, body } => write!(fmt, "(fn {name} ({}) -> {rtype} {body:?})",
 				show(params, |(s,vt)| format!("{s}: {vt}"))),
-			Expr::Var { name, vtype, body } => write!(fmt, "(var {name}: {vtype} = {body}"),
+			Expr::Var { name, body } => write!(fmt, "(var {name} = {body}"),
 			Expr::If { cond, bt, bf } => write!(fmt, "(if {cond} {bt:?} {bf:?})"),
 			Expr::FnCall { name, args } => write!(fmt, "{name}({args:?})"),
 		}
@@ -1117,7 +1115,7 @@ fn stmt_var<'a>(
 		.or_else(|_| expr(parser, 0))?;
 	let end = parser.peek(-1).range().end;
 	let kind = vtype.clone();
-	Ok(Node::new(Expr::Var { name, vtype, body }, kind, start..end))
+	Ok(Node::new(Expr::Var { name, body }, kind, start..end))
 }
 
 /// while := 'while' expr block
@@ -1237,10 +1235,9 @@ mod test {
 		body: Node,
 	) -> Node {
 		Node {
-			kind: vtype.clone(),
+			kind: vtype,
 			expr: Expr::Var {
 				name: name.into(),
-				vtype,
 				body,
 			}.into(),
 			info: 0..0,

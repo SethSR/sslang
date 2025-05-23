@@ -1093,8 +1093,7 @@ fn stmt_fn(
 		.unwrap_or(ValueType::Unit);
 	let body = block(parser)?;
 	let end = parser.peek(-1).range().end;
-	let kind = rtype.clone();
-	Ok(Node::new(Expr::Fun { name, params, rtype, body }, kind, start..end))
+	Ok(Node::new_fun(name, params, rtype, body, start..end))
 }
 
 /// var := 'var' ident (':' value_type)? '=' (block | expr)
@@ -1114,8 +1113,7 @@ fn stmt_var<'a>(
 		.map(|b| Node::new_block(b, body_start..parser.peek(-1).range().end))
 		.or_else(|_| expr(parser, 0))?;
 	let end = parser.peek(-1).range().end;
-	let kind = vtype.clone();
-	Ok(Node::new(Expr::Var { name, body }, kind, start..end))
+	Ok(Node::new_var(name, vtype, body, start..end))
 }
 
 /// while := 'while' expr block
@@ -1147,8 +1145,7 @@ fn stmt_assign<'a>(
 		.map(|b| Node::new_block(b, body_start..parser.peek(-1).range().end))
 		.or_else(|_| expr(parser, 0))?;
 	let end = parser.peek(-1).range().end;
-	let kind = body.kind.clone();
-	Ok(Node::new(Expr::Assign { name, body }, kind, start..end))
+	Ok(Node::new_assign(name, body, start..end))
 }
 
 /// program := statement*

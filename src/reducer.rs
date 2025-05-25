@@ -3,7 +3,8 @@ use std::ops::Range;
 
 use tracing::warn;
 
-use crate::parser::{BinaryOp, Expr, Node, UnaryOp, ValueType};
+use crate::parser::{BinaryOp, Expr, Node, UnaryOp};
+use crate::parser::{Meet, ValueType};
 
 pub(crate) fn eval(
 	ast: Vec<Node>,

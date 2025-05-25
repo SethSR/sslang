@@ -2,14 +2,7 @@
 use std::fmt;
 use std::rc::Rc;
 
-use super::{
-	BinaryOp,
-	Meet,
-	TokenInfo,
-	TypedIdent,
-	UnaryOp,
-	ValueType,
-};
+use super::{BinaryOp, Meet, TokenInfo, TypedIdent, UnaryOp, ValueType};
 
 // TODO - srenshaw - Move node-types from Expr into Node.
 
@@ -22,6 +15,7 @@ pub(crate) struct Node {
 
 impl PartialEq for Node {
 	fn eq(&self, rhs: &Self) -> bool {
+		// TODO - srenshaw - At some point, we'll probably want to add 'kind' to this check.
 		self.expr == rhs.expr
 	}
 }
@@ -154,21 +148,21 @@ impl fmt::Display for Expr {
 					.join(", ")
 		}
 
+impl fmt::Display for Expr {
+	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
 		match self {
-			Expr::Rec { name, fields }    => write!(fmt, "(rec {name} {})",
-				show(fields, |(s,vt)| format!("{s}: {vt}"))),
-			Expr::While { cond, body }    => write!(fmt, "(while {cond} {body:?})"),
-			Expr::Assign { name, body }   => write!(fmt, "({name} = {body})"),
-			Expr::Num(n)                  => write!(fmt, "{n}"),
-			Expr::Id(s)                   => write!(fmt, "{s}"),
-			Expr::Block(b)                => write!(fmt, "{b:?}"),
-			Expr::Unary { op, rhs }       => write!(fmt, "({op} {rhs})"),
-			Expr::Binary { op, lhs, rhs } => write!(fmt, "({op} {lhs} {rhs})"),
-			Expr::Fun { name, params, rtype, body } => write!(fmt, "(fn {name} ({}) -> {rtype} {body:?})",
-				show(params, |(s,vt)| format!("{s}: {vt}"))),
-			Expr::Var { name, body } => write!(fmt, "(var {name} = {body}"),
-			Expr::If { cond, bt, bf } => write!(fmt, "(if {cond} {bt:?} {bf:?})"),
-			Expr::FnCall { name, args } => write!(fmt, "{name}({args:?})"),
+			Expr::While { cond, body }              => write!(fmt, "(while {cond} {body:?})"),
+			Expr::Assign { name, body }             => write!(fmt, "({name} = {body})"),
+			Expr::Num(n)                            => write!(fmt, "{n}"),
+			Expr::Id(s)                             => write!(fmt, "{s}"),
+			Expr::Block(b)                          => write!(fmt, "{b:?}"),
+			Expr::Unary { op, rhs }                 => write!(fmt, "({op} {rhs})"),
+			Expr::Binary { op, lhs, rhs }           => write!(fmt, "({op} {lhs} {rhs})"),
+			Expr::Var { name, body }                => write!(fmt, "(var {name} = {body}"),
+			Expr::If { cond, bt, bf }               => write!(fmt, "(if {cond} {bt:?} {bf:?})"),
+			Expr::FnCall { name, args }             => write!(fmt, "{name}({args:?})"),
+			Expr::Rec { name, fields }              => write!(fmt, "(rec {name} {fields:?})"),
+			Expr::Fun { name, params, rtype, body } => write!(fmt, "(fn {name} ({params:?}) -> {rtype} {body:?})"),
 		}
 	}
 }

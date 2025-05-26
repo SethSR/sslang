@@ -5,7 +5,7 @@ use tracing::{info,debug};
 mod tokens;
 mod lexer;
 mod parser;
-mod reducer;
+// mod reducer;
 
 fn main() -> miette::Result<()> {
 	tracing_subscriber::fmt::init();
@@ -19,20 +19,21 @@ fn main() -> miette::Result<()> {
 	let file = std::fs::read_to_string(&file_name.trim())
 		.into_diagnostic()?;
 
-	let reduce_limit = 50;
+	// let reduce_limit = 50;
 
 	info!("lexing");
 	let tokens = lexer::eval(&file)?;
-	debug!("[{}]", tokens.iter()
+	debug!("Tokens: [{}]", tokens.iter()
 		.map(|t| t.to_string())
 		.collect::<Vec<_>>()
 		.join(" "));
 	info!("parsing");
-	let ast = parser::eval(&file, tokens)?;
-	debug!("{ast:?}");
-	info!("reducer");
-	let ast = reducer::eval(ast, reduce_limit);
-	debug!("{ast:?}");
+	let (start, ast) = parser::eval(&file, tokens)?;
+	debug!("Start ID: {start}");
+	debug!("AST: {ast:?}");
+	// info!("reducer");
+	// let ast = reducer::eval(ast, reduce_limit);
+	// debug!("{ast:?}");
 
 	Ok(())
 }

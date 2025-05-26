@@ -1,16 +1,176 @@
 
+use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
 use super::{BinaryOp, Meet, TokenInfo, TypedIdent, UnaryOp, ValueType};
 
-// TODO - srenshaw - Move node-types from Expr into Node.
+pub(crate) type NodeId = usize;
+
+#[derive(Debug, Default)]
+pub(crate) struct NodeStore {
+	data: Vec<Option<Node>>,
+	free: Vec<NodeId>,
+}
+
+impl NodeStore {
+	pub(super) fn output(self) -> HashMap<NodeId, Node> {
+		self.data.into_iter()
+			.enumerate()
+			.flat_map(|(nx,node)| node.map(|n| (nx,n)))
+			.collect()
+	}
+}
+
+impl NodeStore {
+	pub(super) fn new_block(&mut self, b: Vec<NodeId>, info: TokenInfo) -> NodeId {
+		self.add(Node::new(Expr::Block(b), ValueType::Unit, info))
+	}
+
+	pub(super) fn new_id(
+		&mut self,
+		s: Rc<str>,
+		kind: ValueType,
+		info: TokenInfo,
+	) -> NodeId {
+		self.add(Node::new(Expr::Id(s.into()), kind, info))
+	}
+
+	pub(super) fn new_num(
+		&mut self,
+		n: i64,
+		kind: ValueType,
+		info: TokenInfo,
+	) -> NodeId {
+		self.add(Node::new(Expr::Num(n), kind, info))
+	}
+
+	pub(super) fn new_rec(
+		&mut self,
+		name: Rc<str>,
+		fields: Vec<TypedIdent>,
+		info: TokenInfo,
+	) -> NodeId {
+		let udt = name.to_string();
+		self.add(Node::new(Expr::Rec { name, fields }, ValueType::UDT(udt), info))
+	}
+
+	pub(super) fn new_fun(
+		&mut self,
+		name: Rc<str>,
+		params: Vec<TypedIdent>,
+		rtype: ValueType,
+		body: Vec<NodeId>,
+		info: TokenInfo,
+	) -> NodeId {
+		let kind = rtype.clone();
+		self.add(Node::new(Expr::Fun { name, params, rtype, body }, kind, info))
+	}
+
+	pub(super) fn new_var(
+		&mut self,
+		name: Rc<str>,
+		vtype: ValueType,
+		body: NodeId,
+		info: TokenInfo,
+	) -> NodeId {
+		self.add(Node::new(Expr::Var { name, body }, vtype, info))
+	}
+
+	pub(super) fn new_if(
+		&mut self,
+		cond: NodeId,
+		bt: Vec<NodeId>,
+		bf: Vec<NodeId>,
+		info: TokenInfo,
+	) -> NodeId {
+		let last_true_node = bt.last()
+			.and_then(|nx| self.data.get(*nx))
+			.and_then(|n| n.as_ref());
+		let last_false_node = bf.last()
+			.and_then(|nx| self.data.get(*nx))
+			.and_then(|n| n.as_ref());
+		let kind = match (last_true_node, last_false_node) {
+			(Some(true_node), Some(false_node)) => true_node.kind.meet(&false_node.kind),
+			_ => ValueType::Unit,
+		};
+		self.add(Node::new(Expr::If { cond, bt, bf }, kind, info))
+	}
+
+	pub(super) fn new_while(
+		&mut self,
+		cond: NodeId,
+		body: Vec<NodeId>,
+		info: TokenInfo,
+	) -> NodeId {
+		self.add(Node::new(Expr::While { cond, body }, ValueType::Unit, info))
+	}
+
+	pub(super) fn new_assign(
+		&mut self,
+		name: Rc<str>,
+		body: NodeId,
+		info: TokenInfo,
+	) -> NodeId {
+		self.add(Node::new(Expr::Assign { name, body }, ValueType::Unit, info))
+	}
+
+	pub(super) fn new_unary(
+		&mut self,
+		op: UnaryOp,
+		rhs: NodeId,
+		info: TokenInfo,
+	) -> miette::Result<NodeId> {
+		let kind = self.get(rhs)?.kind.clone();
+		Ok(self.add(Node::new(Expr::Unary { op, rhs }, kind, info)))
+	}
+
+	pub(super) fn new_binary(
+		&mut self,
+		op: BinaryOp,
+		lhs: NodeId,
+		rhs: NodeId,
+		info: TokenInfo,
+	) -> miette::Result<NodeId> {
+		let lhs_kind = &self.get(lhs)?.kind;
+		let rhs_kind = &self.get(rhs)?.kind;
+		let kind = lhs_kind.meet(rhs_kind);
+		Ok(self.add(Node::new(Expr::Binary { op, lhs, rhs }, kind, info)))
+	}
+
+	pub(super) fn new_call(
+		&mut self,
+		name: Rc<str>,
+		args: Vec<NodeId>,
+		info: TokenInfo,
+	) -> NodeId {
+		self.add(Node::new(Expr::FnCall { name, args }, ValueType::Any, info))
+	}
+
+	pub(crate) fn get(&self, nx: NodeId) -> miette::Result<&Node> {
+		self.data.get(nx)
+			.and_then(|n| n.as_ref())
+			.ok_or_else(|| miette::miette!("Compiler Error: expression information not found in parser"))
+	}
+}
+
+impl NodeStore {
+	fn add(&mut self, node: Node) -> NodeId {
+		if let Some(idx) = self.free.pop() {
+			self.data[idx] = Some(node);
+			idx
+		} else {
+			self.data.push(Some(node));
+			self.data.len() - 1
+		}
+	}
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct Node {
 	pub(crate) info: TokenInfo,
 	pub(crate) kind: ValueType,
-	pub(crate) expr: Box<Expr>,
+	pub(crate) expr: Expr,
 }
 
 impl PartialEq for Node {
@@ -22,67 +182,7 @@ impl PartialEq for Node {
 
 impl Node {
 	pub(crate) fn new(expr: Expr, kind: ValueType, info: TokenInfo) -> Self {
-		Self { info, kind, expr: expr.into() }
-	}
-
-	pub(crate) fn new_block(b: Vec<Node>, info: TokenInfo) -> Self {
-		Self::new(Expr::Block(b), ValueType::Unit, info)
-	}
-
-	pub(crate) fn new_rec(name: Rc<str>, fields: Vec<TypedIdent>, info: TokenInfo) -> Self {
-		let udt = name.to_string();
-		Self::new(Expr::Rec { name, fields }, ValueType::UDT(udt), info)
-	}
-
-	pub(crate) fn new_fun(
-		name: Rc<str>,
-		params: Vec<TypedIdent>,
-		rtype: ValueType,
-		body: Vec<Node>,
-		info: TokenInfo,
-	) -> Self {
-		let kind = rtype.clone();
-		Self::new(Expr::Fun { name, params, rtype, body }, kind, info)
-	}
-
-	pub(crate) fn new_var(
-		name: Rc<str>,
-		vtype: ValueType,
-		body: Node,
-		info: TokenInfo,
-	) -> Self {
-		Self::new(Expr::Var { name, body }, vtype, info)
-	}
-
-	pub(crate) fn new_if(cond: Node, bt: Vec<Node>, bf: Vec<Node>, info: TokenInfo) -> Self {
-		let kind = match (bt.last(), bf.last()) {
-			(Some(true_node), Some(false_node)) => true_node.kind.meet(&false_node.kind),
-			_ => ValueType::Unit,
-		};
-		Self::new(Expr::If { cond, bt, bf }, kind, info)
-	}
-
-	pub(crate) fn new_while(cond: Node, body: Vec<Node>, info: TokenInfo) -> Self {
-		Self::new(Expr::While { cond, body }, ValueType::Unit, info)
-	}
-
-	pub(crate) fn new_assign(name: Rc<str>, body: Node, info: TokenInfo) -> Self {
-		let kind = body.kind.clone();
-		Self::new(Expr::Assign { name, body }, kind, info)
-	}
-
-	pub(crate) fn new_unary(op: UnaryOp, rhs: Node, info: TokenInfo) -> Self {
-		let kind = rhs.kind.clone();
-		Self::new(Expr::Unary { op, rhs }, kind, info)
-	}
-
-	pub(crate) fn new_binary(op: BinaryOp, lhs: Node, rhs: Node, info: TokenInfo) -> Self {
-		let kind = lhs.kind.meet(&rhs.kind);
-		Self::new(Expr::Binary { op, lhs, rhs }, kind, info)
-	}
-
-	pub(crate) fn new_call(name: Rc<str>, args: Vec<Node>, info: TokenInfo) -> Self {
-		Self::new(Expr::FnCall { name, args }, ValueType::Any, info)
+		Self { info, kind, expr }
 	}
 }
 
@@ -96,7 +196,7 @@ impl fmt::Display for Node {
 pub(crate) enum Expr {
 	Num(i64),
 	Id(Rc<str>),
-	Block(Vec<Node>),
+	Block(Vec<NodeId>),
 	Rec {
 		name: Rc<str>,
 		fields: Vec<TypedIdent>,
@@ -105,48 +205,39 @@ pub(crate) enum Expr {
 		name: Rc<str>,
 		params: Vec<TypedIdent>,
 		rtype: ValueType,
-		body: Vec<Node>,
+		body: Vec<NodeId>,
 	},
 	Var {
 		name: Rc<str>,
-		body: Node,
+		body: NodeId,
 	},
 	If {
-		cond: Node,
-		bt: Vec<Node>,
-		bf: Vec<Node>,
+		cond: NodeId,
+		bt: Vec<NodeId>,
+		bf: Vec<NodeId>,
 	},
 	While {
-		cond: Node,
-		body: Vec<Node>,
+		cond: NodeId,
+		body: Vec<NodeId>,
 	},
 	Assign {
 		name: Rc<str>,
-		body: Node,
+		body: NodeId,
 	},
 	Unary {
 		op: UnaryOp,
-		rhs: Node,
+		rhs: NodeId,
 	},
 	Binary {
 		op: BinaryOp,
-		lhs: Node,
-		rhs: Node,
+		lhs: NodeId,
+		rhs: NodeId,
 	},
 	FnCall {
 		name: Rc<str>,
-		args: Vec<Node>,
+		args: Vec<NodeId>,
 	},
 }
-
-impl fmt::Display for Expr {
-	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-		fn show<T>(list: &[T], f: fn(&T) -> String) -> String {
-				list.iter()
-					.map(f)
-					.collect::<Vec<_>>()
-					.join(", ")
-		}
 
 impl fmt::Display for Expr {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {

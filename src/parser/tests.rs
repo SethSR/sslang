@@ -1,392 +1,452 @@
 
+use crate::lexer;
 use crate::parser::{
 	BinaryOp,
-	Expr,
 	Node,
+	node::{NodeId, NodeStore},
 	TypedIdent,
 	UnaryOp,
-	Meet,
 	ValueType as VT,
 };
 
-fn num(n: i64) -> Node {
-	Node {
-		kind: VT::Any,
-		expr: Expr::Num(n).into(),
-		info: 0..0,
+use super::Parser;
+
+#[derive(Default)]
+struct Tester(NodeId, NodeStore);
+
+impl Tester {
+	fn finish(mut self) -> Self {
+		self.0 = self.block(&[self.0]);
+		self
+	}
+
+	fn num(&mut self, n: i64) -> NodeId {
+		self.1.new_num(n, VT::Any, 0..0)
+	}
+
+	fn ident(&mut self, s: &str) -> NodeId {
+		self.1.new_id(s.into(), VT::Any, 0..0)
+	}
+
+	fn unary(&mut self, op: UnaryOp, rhs: NodeId) -> miette::Result<NodeId> {
+		self.1.new_unary(op, rhs, 0..0)
+	}
+
+	fn binary(&mut self, op: BinaryOp, lhs: NodeId, rhs: NodeId) -> miette::Result<NodeId> {
+		self.1.new_binary(op, lhs, rhs, 0..0)
+	}
+
+	fn call(&mut self, name: &str, s: &[NodeId]) -> NodeId {
+		self.1.new_call(name.into(), s.to_vec(), 0..0)
+	}
+
+	fn var(
+		&mut self,
+		name: &str,
+		vtype: VT,
+		body: NodeId,
+	) -> NodeId {
+		self.1.new_var(name.into(), vtype, body, 0..0)
+	}
+
+	fn block(
+		&mut self,
+		body: &[NodeId],
+	) -> NodeId {
+		self.1.new_block(body.to_vec(), 0..0)
+	}
+
+	fn fun(
+		&mut self,
+		name: &str,
+		params: &[TypedIdent],
+		rtype: VT,
+		body: &[NodeId],
+	) -> NodeId {
+		self.1.new_fun(name.into(), params.to_vec(), rtype, body.to_vec(), 0..0)
+	}
+
+	fn rec(
+		&mut self,
+		name: &str,
+		fields: &[TypedIdent],
+	) -> NodeId {
+		self.1.new_rec(name.into(), fields.to_vec(), 0..0)
+	}
+
+	fn if_s(
+		&mut self,
+		cond: NodeId,
+		bt: &[NodeId],
+		bf: &[NodeId],
+	) -> NodeId {
+		self.1.new_if(cond, bt.to_vec(), bf.to_vec(), 0..0)
+	}
+
+	fn while_s(
+		&mut self,
+		cond: NodeId,
+		body: &[NodeId],
+	) -> NodeId {
+		self.1.new_while(cond, body.to_vec(), 0..0)
+	}
+
+	fn assign(
+		&mut self,
+		name: &str,
+		body: NodeId,
+	) -> NodeId {
+		self.1.new_assign(name.into(), body, 0..0)
 	}
 }
 
-fn ident(s: &str) -> Node {
-	Node {
-		kind: VT::Any,
-		expr: Expr::Id(s.into()).into(),
-		info: 0..0,
-	}
-}
-
-fn unary(op: UnaryOp, rhs: Node) -> Node {
-	Node {
-		kind: rhs.kind.clone(),
-		expr: Expr::Unary { op, rhs }.into(),
-		info: 0..0,
-	}
-}
-
-fn binary(op: BinaryOp, lhs: Node, rhs: Node) -> Node {
-	Node {
-		kind: lhs.kind.meet(&rhs.kind),
-		expr: Expr::Binary { op, lhs, rhs }.into(),
-		info: 0..0,
-	}
-}
-
-fn fn_call(name: &str, s: &[Node]) -> Node {
-	Node {
-		kind: VT::Any,
-		expr: Expr::FnCall {
-			name: name.into(),
-			args: s.to_vec(),
-		}.into(),
-		info: 0..0,
-	}
-}
-
-fn expr_test(source: &str, s: Node) -> miette::Result<()> {
-	use crate::parser::Parser;
-	use crate::lexer::eval;
-
-	let input = eval(source)?;
+fn expr_test(source: &str, tester: &Tester) -> miette::Result<()> {
+	let input = lexer::eval(source)?;
 	let mut parser = Parser::new(source, &input);
-	assert_eq!(parser.test_expr(0)?, s);
+	let expr = parser.expr(0)?;
+	assert_nodes(expr, &parser.nodes, tester.0, &tester.1);
 	Ok(())
-}
-
-fn var_s(
-	name: &str,
-	vtype: VT,
-	body: Node,
-) -> Node {
-	Node {
-		kind: vtype,
-		expr: Expr::Var {
-			name: name.into(),
-			body,
-		}.into(),
-		info: 0..0,
-	}
-}
-
-fn fn_s(
-	name: &str,
-	params: &[TypedIdent],
-	rtype: VT,
-	body: &[Node],
-) -> Node {
-	Node {
-		kind: VT::Any,
-		expr: Expr::Fun {
-			name: name.into(),
-			params: params.to_vec(),
-			rtype,
-			body: body.to_vec()
-		}.into(),
-		info: 0..0,
-	}
-}
-
-fn rec_s(
-	name: &str,
-	fields: &[TypedIdent],
-) -> Node {
-	Node {
-		kind: VT::Unit,
-		expr: Expr::Rec {
-			name: name.into(),
-			fields: fields.to_vec(),
-		}.into(),
-		info: 0..0,
-	}
-}
-
-fn if_s(
-	cond: Node,
-	bt: &[Node],
-	bf: &[Node],
-) -> Node {
-	Node {
-		kind: bt.last()
-			.zip(bf.last())
-			.map(|(t,f)| t.kind.meet(&f.kind))
-			.unwrap_or(VT::Unit),
-		expr: Expr::If {
-			cond,
-			bt: bt.to_vec(),
-			bf: bf.to_vec(),
-		}.into(),
-		info: 0..0,
-	}
-}
-
-fn while_s(
-	cond: Node,
-	body: &[Node],
-) -> Node {
-	Node {
-		kind: VT::Unit,
-		expr: Expr::While {
-			cond,
-			body: body.to_vec(),
-		}.into(),
-		info: 0..0,
-	}
-}
-
-fn assign_s(
-	name: &str,
-	body: Node,
-) -> Node {
-	Node {
-		kind: body.kind.clone(),
-		expr: Expr::Assign {
-			name: name.into(),
-			body,
-		}.into(),
-		info: 0..0,
-	}
 }
 
 #[test]
 fn unary_op_deref() -> miette::Result<()> {
-	expr_test("@a", unary(UnaryOp::Deref, ident("a")))
+	let mut t = Tester::default();
+	let nx = t.ident("a");
+	t.0 = t.unary(UnaryOp::Deref, nx)?;
+	expr_test("@a", &t)
 }
 
 #[test]
 fn unary_op_neg() -> miette::Result<()> {
-	expr_test("-3", unary(UnaryOp::Neg, num(3)))
+	let mut t = Tester::default();
+	let nx = t.ident("a");
+	t.0 = t.unary(UnaryOp::Neg, nx)?;
+	expr_test("-a", &t)
 }
 
 #[test]
 fn unary_op_not() -> miette::Result<()> {
-	expr_test("!3", unary(UnaryOp::Not, num(3)))
+	let mut t = Tester::default();
+	let nx = t.ident("a");
+	t.0 = t.unary(UnaryOp::Not, nx)?;
+	expr_test("!a", &t)
 }
 
 #[test]
 fn unary_op_pos() -> miette::Result<()> {
-	expr_test("+3", unary(UnaryOp::Pos, num(3)))
+	let mut t = Tester::default();
+	let nx = t.ident("a");
+	t.0 = t.unary(UnaryOp::Pos, nx)?;
+	expr_test("+a", &t)
 }
 
 #[test]
 fn unary_op_ref() -> miette::Result<()> {
-	expr_test("$a", unary(UnaryOp::Ref, ident("a")))
+	let mut t = Tester::default();
+	let nx = t.ident("a");
+	t.0 = t.unary(UnaryOp::Ref, nx)?;
+	expr_test("$a", &t)
 }
 
 #[test]
 fn precedence() -> miette::Result<()> {
-	expr_test("1 + 2 * 3", binary(BinaryOp::Add,
-		num(1),
-		binary(BinaryOp::Mul, num(2), num(3)),
-	))?;
-	expr_test("1 * 2 + 3", binary(BinaryOp::Add,
-		binary(BinaryOp::Mul, num(1), num(2)),
-		num(3),
-	))
+	let mut t = Tester::default();
+	let a = t.num(1);
+	let b = t.num(2);
+	let c = t.num(3);
+	let m = t.binary(BinaryOp::Mul, b, c)?;
+	t.0 = t.binary(BinaryOp::Add, a, m)?;
+	expr_test("1 + 2 * 3", &t)?;
+	let m = t.binary(BinaryOp::Mul, a, b)?;
+	t.0 = t.binary(BinaryOp::Add, m, c)?;
+	expr_test("1 * 2 + 3", &t)
 }
 
 #[test]
 fn parentheses() -> miette::Result<()> {
-	expr_test("1 * (2 + 3)", binary(BinaryOp::Mul,
-		num(1),
-		binary(BinaryOp::Add, num(2), num(3)),
-	))
+	let mut t = Tester::default();
+	let a = t.num(1);
+	let b = t.num(2);
+	let c = t.num(3);
+	let add = t.binary(BinaryOp::Add, b, c)?;
+	t.0 = t.binary(BinaryOp::Mul, a, add)?;
+	expr_test("1 * (2 + 3)", &t)
 }
 
 fn parse_test(
 	input: &str,
-	stmts: &[Node],
+	tester: &Tester,
 ) -> miette::Result<()> {
-	use crate::parser;
-	use crate::lexer;
-
 	eprintln!("input: {input}");
 	let tokens = lexer::eval(input)?;
 	eprintln!("tokens: {tokens:?}");
-	let ast = parser::eval(input, tokens)?;
-	assert_eq!(ast, stmts.to_vec());
+	let mut parser = Parser::new(input, &tokens);
+	let start = parser.program()?;
+	assert_nodes(start, &parser.nodes, tester.0, &tester.1);
 	Ok(())
+}
+
+fn assert_nodes(nxa: NodeId, sa: &NodeStore, nxb: NodeId, sb: &NodeStore) {
+	use crate::parser::Expr;
+
+	match (sa.get(nxa), sb.get(nxb)) {
+		(Ok(Node { expr: a, ..}), Ok(Node { expr: b, ..})) => match (a, b) {
+			(Expr::Id(ia), Expr::Id(ib)) => assert_eq!(ia, ib),
+			(Expr::Num(na), Expr::Num(nb)) => assert_eq!(na, nb),
+			(Expr::Block(ba), Expr::Block(bb)) => {
+				assert_eq!(ba.len(), bb.len());
+				for (a,b) in ba.iter().zip(bb.iter()) {
+					assert_nodes(*a, sa, *b, sb);
+				}
+			}
+			(Expr::Rec { name: na, ..}, Expr::Rec { name: nb, ..}) => assert_eq!(na, nb),
+			(
+				Expr::Fun { name: na, params: pa, rtype: ra, body: ba },
+				Expr::Fun { name: nb, params: pb, rtype: rb, body: bb }
+			) => {
+				assert_eq!(na, nb);
+				assert_eq!(pa, pb);
+				assert_eq!(ra, rb);
+				assert_eq!(ba.len(), bb.len());
+				for (a,b) in ba.iter().zip(bb.iter()) {
+					assert_nodes(*a, sa, *b, sb);
+				}
+			}
+			(Expr::Var { name: na, body: ba }, Expr::Var { name: nb, body: bb }) => {
+				assert_eq!(na, nb);
+				assert_nodes(*ba, sa, *bb, sb);
+			}
+			(Expr::If { cond: ca, bt: ta, bf: fa }, Expr::If { cond: cb, bt: tb, bf: fb }) => {
+				assert_nodes(*ca, sa, *cb, sb);
+				assert_eq!(ta.len(), tb.len());
+				for (a,b) in ta.iter().zip(tb.iter()) {
+					assert_nodes(*a, sa, *b, sb);
+				}
+				assert_eq!(fa.len(), fb.len());
+				for (a,b) in fa.iter().zip(fb.iter()) {
+					assert_nodes(*a, sa, *b, sb);
+				}
+			}
+			(Expr::While { cond: ca, body: ba }, Expr::While { cond: cb, body: bb }) => {
+				assert_nodes(*ca, sa, *cb, sb);
+				assert_eq!(ba.len(), bb.len());
+				for (a,b) in ba.iter().zip(bb.iter()) {
+					assert_nodes(*a, sa, *b, sb);
+				}
+			}
+			(Expr::Assign { name: na, body: ba }, Expr::Assign { name: nb, body: bb }) => {
+				assert_eq!(na, nb);
+				assert_nodes(*ba, sa, *bb, sb);
+			}
+			(Expr::Unary { op: oa, rhs: ra }, Expr::Unary { op: ob, rhs: rb }) => {
+				assert_eq!(oa, ob);
+				assert_nodes(*ra, sa, *rb, sb);
+			}
+			(Expr::Binary { op: oa, lhs: la, rhs: ra }, Expr::Binary { op: ob, lhs: lb, rhs: rb }) => {
+				assert_eq!(oa, ob);
+				assert_nodes(*la, sa, *lb, sb);
+				assert_nodes(*ra, sa, *rb, sb);
+			}
+			(Expr::FnCall { name: na, args: aa }, Expr::FnCall { name: nb, args: ab }) => {
+				assert_eq!(na, nb);
+				assert_eq!(aa.len(), ab.len());
+				for (a,b) in aa.iter().zip(ab.iter()) {
+					assert_nodes(*a, sa, *b, sb);
+				}
+			}
+			(a,b) => panic!("{a:?} != {b:?}"),
+		}
+		(a,b) => panic!("{a:?} != {b:?}"),
+	}
 }
 
 #[test]
 fn empty_input() -> miette::Result<()> {
-	parse_test("", &[])
+	let mut t = Tester::default();
+	t.0 = t.block(&[]);
+	parse_test("", &t)
 }
 
 #[test]
 fn var_stmt() -> miette::Result<()> {
-	parse_test("var a = 0", &[
-		var_s("a", VT::Unit, num(0)),
-	])
+	let mut t = Tester::default();
+	let nx = t.num(0);
+	t.0 = t.var("a", VT::Any, nx);
+	parse_test("var a = 0", &t.finish())
 }
 
 #[test]
 fn var_stmt_expr() -> miette::Result<()> {
-	parse_test("var a = 3 * 2 + 1", &[
-		var_s("a", VT::Unit, binary(BinaryOp::Add,
-			binary(BinaryOp::Mul, num(3), num(2)),
-			num(1),
-		)),
-	])
+	let mut t = Tester::default();
+	let a = t.num(3);
+	let b = t.num(2);
+	let c = t.num(1);
+	let mul = t.binary(BinaryOp::Mul, a, b)?;
+	let add = t.binary(BinaryOp::Add, mul, c)?;
+	t.0 = t.var("a", VT::Any, add);
+	parse_test("var a = 3 * 2 + 1", &t.finish())
 }
 
 #[test]
 fn var_stmt_vtype() -> miette::Result<()> {
-	parse_test("var a: u8 = 0", &[
-		var_s("a", VT::to_u8(), num(0)),
-	])
+	let mut t = Tester::default();
+	let a = t.num(0);
+	t.0 = t.var("a", VT::to_u8(), a);
+	parse_test("var a: u8 = 0", &t.finish())
 }
 
 #[test]
 fn var_stmt_udt_simple() -> miette::Result<()> {
-	parse_test("var a = b", &[
-		var_s("a", VT::Unit, ident("b")),
-	])
+	let mut t = Tester::default();
+	let a = t.ident("b");
+	t.0 = t.var("a", VT::Unit, a);
+	parse_test("var a = b", &t.finish())
 }
 
 #[test]
 fn var_stmt_udt_fncall_empty() -> miette::Result<()> {
-	parse_test("var a = b()", &[
-		var_s("a", VT::Unit, fn_call("b", &[]))
-	])
+	let mut t = Tester::default();
+	let a = t.call("b", &[]);
+	t.0 = t.var("a", VT::Unit, a);
+	parse_test("var a = b()", &t.finish())
 }
 
 #[test]
 fn var_stmt_udt_fncall_single() -> miette::Result<()> {
-	parse_test("var a = b(c)", &[
-		var_s("a", VT::Unit, fn_call("b", &[ident("c")]))
-	])
+	let mut t = Tester::default();
+	let a = t.ident("c");
+	let b = t.call("b", &[a]);
+	t.0 = t.var("a", VT::Unit, b);
+	parse_test("var a = b(c)", &t.finish())
 }
 
 #[test]
 fn var_stmt_udt_fncall_multi() -> miette::Result<()> {
-	parse_test("var a = b(c, d + e)", &[
-		var_s("a", VT::Unit, fn_call("b", &[
-			ident("c"),
-			binary(BinaryOp::Add, ident("d"), ident("e")),
-		]))
-	])
+	let mut t = Tester::default();
+	let c = t.ident("c");
+	let d = t.ident("d");
+	let e = t.ident("e");
+	let add = t.binary(BinaryOp::Add, d, e)?;
+	let call = t.call("b", &[c, add]);
+	t.0 = t.var("a", VT::Unit, call);
+	parse_test("var a = b(c, d + e)", &t.finish())
 }
 
 #[test]
 fn fn_stmt() -> miette::Result<()> {
-	parse_test("fn a() {}", &[
-		fn_s("a", &[], VT::Unit, &[]),
-	])
+	let mut t = Tester::default();
+	t.0 = t.fun("a", &[], VT::Unit, &[]);
+	parse_test("fn a() {}", &t.finish())
 }
 
 #[test]
 fn fn_stmt_params() -> miette::Result<()> {
-	parse_test("fn a(b:u8 c:s16 d:fw6 e:fd10) {}", &[
-		fn_s("a", &[
-			("b".into(), VT::to_u8()),
-			("c".into(), VT::to_s16()),
-			("d".into(), VT::to_f16(6)),
-			("e".into(), VT::to_f32(10)),
-		], VT::Unit, &[]),
-	])
+	let mut t = Tester::default();
+	t.0 = t.fun("a", &[
+		("b".into(), VT::to_u8()),
+		("c".into(), VT::to_s16()),
+		("d".into(), VT::to_f16(6)),
+		("e".into(), VT::to_f32(10)),
+	], VT::Unit, &[]);
+	parse_test("fn a(b:u8 c:s16 d:fw6 e:fd10) {}", &t.finish())
 }
 
 #[test]
 fn fn_stmt_rtype_simple() -> miette::Result<()> {
-	parse_test("fn a() -> u8 {}", &[
-		fn_s("a", &[], VT::to_u8(), &[])
-	])
+	let mut t = Tester::default();
+	t.0 = t.fun("a", &[], VT::to_u8(), &[]);
+	parse_test("fn a() -> u8 {}", &t.finish())
 }
 
 #[test]
 fn fn_stmt_rtype_udt() -> miette::Result<()> {
-	parse_test("fn a() -> b {}", &[
-		fn_s("a", &[], VT::UDT("b".to_string()), &[])
-	])
+	let mut t = Tester::default();
+	t.0 = t.fun("a", &[], VT::UDT("b".to_string()), &[]);
+	parse_test("fn a() -> b {}", &t.finish())
 }
 
 #[test]
 fn fn_stmt_body() -> miette::Result<()> {
+	let mut t = Tester::default();
+	let n1 = t.num(1);
+	let vb = t.var("b", VT::Unit, n1);
+	let n2 = t.num(2);
+	let vc = t.var("c", VT::Unit, n2);
+	let b = t.ident("b");
+	let c = t.ident("c");
+	let add = t.binary(BinaryOp::Add, b, c)?;
+	t.0 = t.fun("a", &[], VT::Unit, &[vb, vc, add]);
 	parse_test("fn a() {
 		var b = 1
 		var c = 2
 		b + c
-	}", &[
-		fn_s("a", &[], VT::Unit, &[
-			var_s("b", VT::Unit, num(1)),
-			var_s("c", VT::Unit, num(2)),
-			binary(BinaryOp::Add, ident("b"), ident("c")),
-		]),
-	])
+	}", &t.finish())
 }
 
 #[test]
 fn rec_stmt() -> miette::Result<()> {
-	parse_test("rec a{}", &[
-		rec_s("a", &[]),
-	])
+	let mut t = Tester::default();
+	t.0 = t.rec("a", &[]);
+	parse_test("rec a{}", &t.finish())
 }
 
 #[test]
 fn rec_stmt_fields() -> miette::Result<()> {
-	parse_test("rec vec{x:fd y:fd}", &[
-		rec_s("vec", &[
-			("x".into(), VT::to_f32(16)),
-			("y".into(), VT::to_f32(16)),
-		])
-	])
+	let mut t = Tester::default();
+	t.0 = t.rec("vec", &[
+		("x".into(), VT::to_f32(16)),
+		("y".into(), VT::to_f32(16)),
+	]);
+	parse_test("rec vec{x:fd y:fd}", &t.finish())
 }
 
 #[test]
 fn field_access() -> miette::Result<()> {
-	parse_test("var a = b.c.d", &[
-		var_s("a", VT::Unit, binary(BinaryOp::Accessor,
-			ident("b"),
-			binary(BinaryOp::Accessor, ident("c"), ident("d")),
-		))
-	])
+	let mut t = Tester::default();
+	let b = t.ident("b");
+	let c = t.ident("c");
+	let d = t.ident("d");
+	let acc = t.binary(BinaryOp::Accessor, c, d)?;
+	let acc = t.binary(BinaryOp::Accessor, b, acc)?;
+	t.0 = t.var("a", VT::Unit, acc);
+	parse_test("var a = b.c.d", &t.finish())
 }
 
 #[test]
 fn if_stmt() -> miette::Result<()> {
-	parse_test("if a > b {a}", &[
-		if_s(
-			binary(BinaryOp::CmpGT, ident("a"), ident("b")),
-			&[ident("a")],
-			&[],
-		)
-	])
+	let mut t = Tester::default();
+	let a = t.ident("a");
+	let b = t.ident("b");
+	let gt = t.binary(BinaryOp::CmpGT, a, b)?;
+	t.0 = t.if_s(gt, &[a], &[]);
+	parse_test("if a > b {a}", &t.finish())
 }
 
 #[test]
 fn if_else_stmt() -> miette::Result<()> {
-	parse_test("if a < b {a} else {b}", &[
-		if_s(
-			binary(BinaryOp::CmpLT, ident("a"), ident("b")),
-			&[ident("a")],
-			&[ident("b")],
-		)
-	])
+	let mut t = Tester::default();
+	let a = t.ident("a");
+	let b = t.ident("b");
+	let lt = t.binary(BinaryOp::CmpLT, a, b)?;
+	t.0 = t.if_s(lt, &[a], &[b]);
+	parse_test("if a < b {a} else {b}", &t.finish())
 }
 
 #[test]
 fn while_stmt() -> miette::Result<()> {
-	parse_test("while a == b {b}", &[
-		while_s(
-			binary(BinaryOp::CmpEq, ident("a"), ident("b")),
-			&[ident("b")],
-		)
-	])
+	let mut t = Tester::default();
+	let a = t.ident("a");
+	let b = t.ident("b");
+	let eq = t.binary(BinaryOp::CmpEq, a, b)?;
+	t.0 = t.while_s(eq, &[b]);
+	parse_test("while a == b {b}", &t.finish())
 }
 
 #[test]
 fn assign_stmt() -> miette::Result<()> {
-	parse_test("a = 3", &[
-		assign_s("a", num(3)),
-	])
+	let mut t = Tester::default();
+	let n3 = t.num(3);
+	t.0 = t.assign("a", n3);
+	parse_test("a = 3", &t.finish())
 }
 

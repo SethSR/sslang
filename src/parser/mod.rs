@@ -20,7 +20,7 @@ pub(crate) use node::{Expr, Node, NodeId};
 pub(crate) type TypedIdent = (Rc<str>, ValueType);
 
 use parser::Parser;
-use types::Int;
+use types::{Fix, Int};
 
 type TokenInfo = Range<usize>;
 pub(crate) type NodeMap = HashMap<NodeId, Node>;

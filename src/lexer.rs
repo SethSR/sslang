@@ -206,7 +206,11 @@ impl<'a> Iterator for Lexer<'a> {
 						break self.next(index);
 					}
 					let s = &self.source[c_at..self.index];
-					break output(TokenType::Number(s.into()));
+					break if have_dot {
+						output(TokenType::Fixed(s.into()))
+					} else {
+						output(TokenType::Integer(s.into()))
+					};
 				}
 
 				w if w.is_whitespace() => {
@@ -317,10 +321,10 @@ mod tokenizes {
 	#[test]
 	fn numbers() -> miette::Result<()> {
 		lex_test("1 2.34 5_6 7_8.9", &[
-			TokenType::Number("1".into()),
-			TokenType::Number("2.34".into()),
-			TokenType::Number("5_6".into()),
-			TokenType::Number("7_8.9".into()),
+			TokenType::Integer("1".into()),
+			TokenType::Fixed("2.34".into()),
+			TokenType::Integer("5_6".into()),
+			TokenType::Fixed("7_8.9".into()),
 		])
 	}
 }

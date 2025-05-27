@@ -2,7 +2,7 @@
 use std::rc::Rc;
 
 use miette::{LabeledSpan, IntoDiagnostic, WrapErr};
-use tracing::{instrument, trace};
+use tracing::trace;
 
 use crate::tokens::{Token, TokenType};
 
@@ -10,6 +10,7 @@ use super::node::{NodeId, NodeStore};
 use super::{
 	BinaryOp,
 	Expr,
+	Fix,
 	Int,
 	TypedIdent,
 	ValueType,
@@ -84,9 +85,8 @@ impl<'a,'b> Parser<'a,'b> {
 	}
 }
 
-#[instrument]
-fn float_to_fixed(n: f64) -> u64 {
-	(n * (1u64 << 32) as f64) as u64
+fn float_to_fixed(n: f64) -> i64 {
+	(n * (1u64 << 32) as f64) as i64
 }
 
 #[test]
@@ -97,7 +97,6 @@ fn convert_float_to_fixed() {
 	assert_eq!(0x00000006_66666666, float_to_fixed(6.4));
 }
 
-#[instrument]
 fn infix_binding_power(tt: &TokenType) -> Option<(u8,u8)> {
 	use TokenType as TT;
 
@@ -137,7 +136,7 @@ fn infix_binding_power(tt: &TokenType) -> Option<(u8,u8)> {
 		TT::U8 | TT::U16 | TT::U32 |
 		TT::S8 | TT::S16 | TT::S32 |
 		TT::F16(_) | TT::F32(_) |
-		TT::Ident(_) | TT::Number(_) |
+		TT::Ident(_) | TT::Integer(_) | TT::Fixed(_) |
 		// Unary Op Tokens
 		TT::At | TT::Bang |
 		TT::Dollar |
@@ -149,7 +148,6 @@ fn infix_binding_power(tt: &TokenType) -> Option<(u8,u8)> {
 	}
 }
 
-#[instrument]
 fn prefix_binding_power(tt: &TokenType) -> Option<u8> {
 	use TokenType as TT;
 
@@ -162,10 +160,14 @@ fn prefix_binding_power(tt: &TokenType) -> Option<u8> {
 }
 
 impl Parser<'_,'_> {
-	#[instrument(skip(self))]
-	pub(super) fn num(&mut self) -> miette::Result<u64> {
+	pub(super) fn num(&mut self) -> miette::Result<i64> {
 		match self.peek(0).tt.clone() {
-			TokenType::Number(s) => {
+			TokenType::Integer(s) => {
+				self.index += 1;
+				Ok(s.parse::<i64>()
+					.into_diagnostic()?)
+			}
+			TokenType::Fixed(s) => {
 				self.index += 1;
 				Ok(float_to_fixed(s
 					.chars()
@@ -173,7 +175,7 @@ impl Parser<'_,'_> {
 					.collect::<String>()
 					.parse::<f64>()
 					.into_diagnostic()
-					.wrap_err("lexer should not allow invalid floating-point values")?))
+					.wrap_err("lexer should not allow invalid fixed-point values")?))
 			}
 			TokenType::EOF => error!(eof, self, "Number"),
 			_ => error!(self, "Number"),
@@ -192,7 +194,6 @@ impl Parser<'_,'_> {
 		}
 	}
 
-	#[instrument(skip(self))]
 	pub(super) fn parse_fixed_point(&self, prefix: &str, max_bits: u8) -> miette::Result<u8> {
 		let token = self.peek(0);
 		let token_str = token.to_string();
@@ -257,7 +258,6 @@ impl Parser<'_,'_> {
 		}
 	}
 
-	#[instrument(skip(self))]
 	pub(super) fn ident_typed(&mut self) -> miette::Result<TypedIdent> {
 		let id = self.ident()?;
 		let val_type = self.value_type()?;
@@ -265,7 +265,6 @@ impl Parser<'_,'_> {
 	}
 
 	/// args := (expr (',' expr)* ','?)?
-	#[instrument(skip(self))]
 	pub(super) fn args(&mut self) -> Option<Vec<NodeId>> {
 		let first = self.expr(0)
 			.ok()?;
@@ -294,7 +293,6 @@ impl Parser<'_,'_> {
 	}
 
 	/// expr_if := expr block ('else' block)?
-	#[instrument(skip(self))]
 	pub(super) fn expr_if(&mut self) -> miette::Result<(NodeId,Vec<NodeId>,Vec<NodeId>)> {
 		let cond = self.expr(0)?;
 		let bt = self.block()?;
@@ -305,7 +303,6 @@ impl Parser<'_,'_> {
 	}
 
 	/// if := 'if' expr_if
-	#[instrument(skip(self))]
 	pub(super) fn stmt_if(&mut self) -> miette::Result<NodeId> {
 		let start = self.peek(0).range().start;
 		self.match_token(TokenType::If)?;
@@ -314,7 +311,6 @@ impl Parser<'_,'_> {
 		Ok(self.nodes.new_if(cond, bt, bf, start..end))
 	}
 
-	#[instrument(skip(self))]
 	pub(super) fn expr(&mut self, min_bp: u8) -> miette::Result<NodeId> {
 		use TokenType as TT;
 
@@ -330,13 +326,14 @@ impl Parser<'_,'_> {
 				self.nodes.new_id(Rc::clone(s), ValueType::Any, left_token.range())
 			}
 
-			TT::Number(ref n) => {
-				self.index += 1;
-				self.nodes.new_num(
-					n.parse::<i64>().into_diagnostic()?,
-					ValueType::Int(Int::Bot),
-					left_token.range(),
-				)
+			TT::Integer(_) => {
+				let num = self.num()?;
+				self.nodes.new_num(num, ValueType::Int(Int::Bot), left_token.range())
+			}
+
+			TT::Fixed(_) => {
+				let num = self.num()?;
+				self.nodes.new_num(num, ValueType::Fix(Fix::Bot), left_token.range())
 			}
 
 			TT::If => {
@@ -381,7 +378,7 @@ impl Parser<'_,'_> {
 		loop {
 			let op_token = self.peek(0).clone();
 			if matches!(op_token.tt,
-				TT::Ident(_) | TT::Number(_) |
+				TT::Ident(_) | TT::Integer(_) | TT::Fixed(_) |
 				TT::If | TT::Else | TT::While |
 				TT::Fun | TT::Rec | TT::Var |
 				TT::U8 | TT::U16 | TT::U32 |
@@ -437,7 +434,6 @@ impl Parser<'_,'_> {
 	}
 
 	/// params := ( ident ':' value_type )*
-	#[instrument(skip(self))]
 	pub(super) fn params(&mut self) -> miette::Result<Vec<TypedIdent>> {
 		let mut out = Vec::new();
 		while let Ok(id) = self.ident() {
@@ -449,7 +445,6 @@ impl Parser<'_,'_> {
 	}
 
 	/// block := '{' stmt* expr? '}'
-	#[instrument(skip(self))]
 	pub(super) fn block(&mut self) -> miette::Result<Vec<NodeId>> {
 		self.match_token(TokenType::OBrace)?;
 		let mut body = Vec::new();
@@ -464,7 +459,6 @@ impl Parser<'_,'_> {
 	}
 
 	/// rec := 'rec' ident '{' params '}'
-	#[instrument(skip(self))]
 	pub(super) fn stmt_rec(&mut self) -> miette::Result<NodeId> {
 		let start = self.peek(0).range().start;
 		self.match_token(TokenType::Rec)?;
@@ -477,7 +471,6 @@ impl Parser<'_,'_> {
 	}
 
 	/// fn := 'fn' ident '(' params ')' ('->' value_type)? block
-	#[instrument(skip(self))]
 	pub(super) fn stmt_fn(&mut self) -> miette::Result<NodeId> {
 		let start = self.peek(0).range().start;
 		self.match_token(TokenType::Fun)?;
@@ -494,7 +487,6 @@ impl Parser<'_,'_> {
 	}
 
 	/// var := 'var' ident (':' value_type)? '=' (block | expr)
-	#[instrument(skip(self))]
 	pub(super) fn stmt_var(&mut self) -> miette::Result<NodeId> {
 		let start = self.peek(0).range().start;
 		self.match_token(TokenType::Var)?;
@@ -512,7 +504,6 @@ impl Parser<'_,'_> {
 	}
 
 	/// while := 'while' expr block
-	#[instrument(skip(self))]
 	pub(super) fn stmt_while(&mut self) -> miette::Result<NodeId> {
 		let start = self.peek(0).range().start;
 		self.match_token(TokenType::While)?;
@@ -523,7 +514,6 @@ impl Parser<'_,'_> {
 	}
 
 	/// assign := ident '=' (block | expr)
-	#[instrument(skip(self))]
 	pub(super) fn stmt_assign(&mut self) -> miette::Result<NodeId> {
 		let start = self.peek(0).range().start;
 		if !matches!(self.peek(0).tt, TokenType::Ident(_)) || self.peek(1).tt != TokenType::Eq1 {

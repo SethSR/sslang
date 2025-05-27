@@ -8,8 +8,9 @@ pub(crate) enum TokenType {
 	EOF,
 
 	// Literals
-	Ident(Rc<str>),  // [a-zA-Z_][a-zA-Z0-9_]*
-	Number(Rc<str>), // [0-9_]+\.?[0-9_]*
+	Ident(Rc<str>),   // [a-zA-Z_][a-zA-Z0-9_]*
+	Integer(Rc<str>), // [0-9_]+
+	Fixed(Rc<str>),   // [0-9_]+\.[0-9_]*
 
 	// Keywords
 	If,    // 'if'
@@ -105,7 +106,7 @@ impl Token {
 
 			TT::While => 5,
 
-			TT::Ident(s) | TT::Number(s) |
+			TT::Ident(s) | TT::Integer(s) | TT::Fixed(s) |
 			TT::F16(s) | TT::F32(s) => s.len(),
 		};
 
@@ -117,7 +118,8 @@ impl PartialEq for Token {
 	fn eq(&self, rhs: &Self) -> bool {
 		match (&self.tt, &rhs.tt) {
 			(TokenType::Ident(a), TokenType::Ident(b)) |
-			(TokenType::Number(a), TokenType::Number(b)) => a == b,
+			(TokenType::Integer(a), TokenType::Integer(b)) => a == b,
+			(TokenType::Fixed(a), TokenType::Fixed(b)) => a == b,
 			_ => self.tt == rhs.tt,
 		}
 	}
@@ -142,7 +144,7 @@ impl fmt::Display for Token {
 		use TokenType as TT;
 
 		match &self.tt {
-			TT::Ident(s) | TT::Number(s) |
+			TT::Ident(s) | TT::Integer(s) | TT::Fixed(s) |
 			TT::F16(s) | TT::F32(s) => write!(fmt, "{s}"),
 			tt => write!(fmt, "{tt:?}"),
 		}

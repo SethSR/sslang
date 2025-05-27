@@ -2,7 +2,7 @@
 use std::rc::Rc;
 
 use miette::{LabeledSpan, IntoDiagnostic, WrapErr};
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::tokens::{Token, TokenType};
 
@@ -161,7 +161,9 @@ fn prefix_binding_power(tt: &TokenType) -> Option<u8> {
 
 impl Parser<'_,'_> {
 	pub(super) fn num(&mut self) -> miette::Result<i64> {
-		match self.peek(0).tt.clone() {
+		debug!("Num");
+		trace!("- start");
+		let out = match self.peek(0).tt.clone() {
 			TokenType::Integer(s) => {
 				self.index += 1;
 				Ok(s.parse::<i64>()
@@ -179,19 +181,25 @@ impl Parser<'_,'_> {
 			}
 			TokenType::EOF => error!(eof, self, "Number"),
 			_ => error!(self, "Number"),
-		}
+		};
+		trace!("- end");
+		out
 	}
 
 	pub(super) fn ident(&mut self) -> miette::Result<Rc<str>> {
-		match self.peek(0).tt.clone() {
+		debug!("Ident");
+		trace!("- start");
+		let out = match self.peek(0).tt.clone() {
 			TokenType::Ident(s) => {
-				trace!("{}", self.peek(0));
+				trace!("  {s}");
 				self.index += 1;
 				Ok(s)
 			}
 			TokenType::EOF => error!(eof, self, "Identifier"),
 			_ => error!(self, "Identifier"),
-		}
+		};
+		trace!("- end");
+		out
 	}
 
 	pub(super) fn parse_fixed_point(&self, prefix: &str, max_bits: u8) -> miette::Result<u8> {
@@ -226,6 +234,8 @@ impl Parser<'_,'_> {
 	}
 
 	pub(super) fn value_type(&mut self) -> miette::Result<ValueType> {
+		debug!("ValueType");
+		trace!("- start");
 		let token = self.peek(0).clone();
 		let out = match token.tt {
 			TokenType::U8  => ValueType::to_u8(),
@@ -239,33 +249,37 @@ impl Parser<'_,'_> {
 			TokenType::Ident(_) => ValueType::UDT(token.to_string()),
 			_ => return error!(token.tt, self, "Value Type"),
 		};
-		trace!("{token}");
 		self.index += 1;
+		debug!("  {token}");
+		trace!("- end");
 		Ok(out)
 	}
 
 	pub(super) fn match_token(&mut self, tt: TokenType) -> miette::Result<()> {
 		match self.peek(0).tt.clone() {
 			t if t != tt => if t == TokenType::EOF {
-				error!(self, tt)
-			} else {
 				error!(eof, self, tt)
+			} else {
+				error!(self, tt)
 			}
-			_ => {
-				trace!("{}", self.peek(0));
-				Ok(self.index += 1)
-			}
+			_ => Ok(self.index += 1),
 		}
 	}
 
 	pub(super) fn ident_typed(&mut self) -> miette::Result<TypedIdent> {
+		debug!("TypedIdent");
+		trace!("- start");
 		let id = self.ident()?;
+		self.match_token(TokenType::Colon)?;
 		let val_type = self.value_type()?;
+		trace!("- end");
 		Ok((id, val_type))
 	}
 
 	/// args := (expr (',' expr)* ','?)?
 	pub(super) fn args(&mut self) -> Option<Vec<NodeId>> {
+		debug!("Args");
+		trace!("- start");
 		let first = self.expr(0)
 			.ok()?;
 		let mut out = vec![first];
@@ -276,6 +290,7 @@ impl Parser<'_,'_> {
 			out.push(next);
 		}
 		let _ = self.match_token(TokenType::Comma);
+		trace!("- end");
 		Some(out)
 	}
 
@@ -294,24 +309,32 @@ impl Parser<'_,'_> {
 
 	/// expr_if := expr block ('else' block)?
 	pub(super) fn expr_if(&mut self) -> miette::Result<(NodeId,Vec<NodeId>,Vec<NodeId>)> {
+		debug!("E-If");
+		trace!("- start");
 		let cond = self.expr(0)?;
 		let bt = self.block()?;
 		let bf = self.match_token(TokenType::Else)
 			.and_then(|_| self.block())
 			.unwrap_or_default();
+		trace!("- end");
 		Ok((cond, bt, bf))
 	}
 
 	/// if := 'if' expr_if
 	pub(super) fn stmt_if(&mut self) -> miette::Result<NodeId> {
+		debug!("S-If");
+		trace!("- start");
 		let start = self.peek(0).range().start;
 		self.match_token(TokenType::If)?;
 		let (cond, bt, bf) = self.expr_if()?;
 		let end = self.peek(-1).range().end;
+		trace!("- end");
 		Ok(self.nodes.new_if(cond, bt, bf, start..end))
 	}
 
 	pub(super) fn expr(&mut self, min_bp: u8) -> miette::Result<NodeId> {
+		debug!("Expr");
+		trace!("- start");
 		use TokenType as TT;
 
 		let left_token = self.peek(0).clone();
@@ -429,23 +452,27 @@ impl Parser<'_,'_> {
 			break;
 		}
 
-		trace!("{lhs}");
+		debug!("  {lhs}");
+		trace!("- end");
 		Ok(lhs)
 	}
 
 	/// params := ( ident ':' value_type )*
 	pub(super) fn params(&mut self) -> miette::Result<Vec<TypedIdent>> {
+		debug!("Params");
+		trace!("- start");
 		let mut out = Vec::new();
-		while let Ok(id) = self.ident() {
-			self.match_token(TokenType::Colon)?;
-			let vt = self.value_type()?;
-			out.push((id,vt));
+		while let Ok(id) = self.ident_typed() {
+			out.push(id);
 		}
+		trace!("- end");
 		Ok(out)
 	}
 
 	/// block := '{' stmt* expr? '}'
 	pub(super) fn block(&mut self) -> miette::Result<Vec<NodeId>> {
+		debug!("Block");
+		trace!("- start");
 		self.match_token(TokenType::OBrace)?;
 		let mut body = Vec::new();
 		while let Ok(stmt) = self.statement() {
@@ -455,11 +482,14 @@ impl Parser<'_,'_> {
 			body.push(output);
 		}
 		self.match_token(TokenType::CBrace)?;
+		trace!("- end");
 		Ok(body)
 	}
 
 	/// rec := 'rec' ident '{' params '}'
 	pub(super) fn stmt_rec(&mut self) -> miette::Result<NodeId> {
+		debug!("Record");
+		trace!("- start");
 		let start = self.peek(0).range().start;
 		self.match_token(TokenType::Rec)?;
 		let name = self.ident()?;
@@ -467,11 +497,14 @@ impl Parser<'_,'_> {
 		let fields = self.params()?;
 		self.match_token(TokenType::CBrace)?;
 		let end = self.peek(-1).range().end;
+		trace!("- end");
 		Ok(self.nodes.new_rec(name, fields, start..end))
 	}
 
 	/// fn := 'fn' ident '(' params ')' ('->' value_type)? block
 	pub(super) fn stmt_fn(&mut self) -> miette::Result<NodeId> {
+		debug!("Function");
+		trace!("- start");
 		let start = self.peek(0).range().start;
 		self.match_token(TokenType::Fun)?;
 		let name = self.ident()?;
@@ -483,11 +516,14 @@ impl Parser<'_,'_> {
 			.unwrap_or(ValueType::Unit);
 		let body = self.block()?;
 		let end = self.peek(-1).range().end;
+		trace!("- end");
 		Ok(self.nodes.new_fun(name, params, rtype, body, start..end))
 	}
 
 	/// var := 'var' ident (':' value_type)? '=' (block | expr)
 	pub(super) fn stmt_var(&mut self) -> miette::Result<NodeId> {
+		debug!("Variable");
+		trace!("- start");
 		let start = self.peek(0).range().start;
 		self.match_token(TokenType::Var)?;
 		let name = self.ident()?;
@@ -500,21 +536,27 @@ impl Parser<'_,'_> {
 			.map(|b| self.nodes.new_block(b, body_start..self.peek(-1).range().end))
 			.or_else(|_| self.expr(0))?;
 		let end = self.peek(-1).range().end;
+		trace!("- end");
 		Ok(self.nodes.new_var(name, vtype, body, start..end))
 	}
 
 	/// while := 'while' expr block
 	pub(super) fn stmt_while(&mut self) -> miette::Result<NodeId> {
+		debug!("While");
+		trace!("- start");
 		let start = self.peek(0).range().start;
 		self.match_token(TokenType::While)?;
 		let cond = self.expr(0)?;
 		let body = self.block()?;
 		let end = self.peek(-1).range().end;
+		trace!("- end");
 		Ok(self.nodes.new_while(cond, body, start..end))
 	}
 
 	/// assign := ident '=' (block | expr)
 	pub(super) fn stmt_assign(&mut self) -> miette::Result<NodeId> {
+		debug!("Assign");
+		trace!("- start");
 		let start = self.peek(0).range().start;
 		if !matches!(self.peek(0).tt, TokenType::Ident(_)) || self.peek(1).tt != TokenType::Eq1 {
 			return error!(self, "Assignment");
@@ -526,6 +568,7 @@ impl Parser<'_,'_> {
 			.map(|b| self.nodes.new_block(b, body_start..self.peek(-1).range().end))
 			.or_else(|_| self.expr(0))?;
 		let end = self.peek(-1).range().end;
+		trace!("- end");
 		Ok(self.nodes.new_assign(name, body, start..end))
 	}
 }

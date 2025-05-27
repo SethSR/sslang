@@ -68,7 +68,10 @@ fn main() -> miette::Result<()> {
 	options.debug.dedup();
 
 	tracing_subscriber::fmt()
-		.with_max_level(tracing::Level::DEBUG)
+		.without_time()
+		//.with_file(false)
+		.with_max_level(tracing::Level::TRACE)
+		.compact()
 		.init();
 
 	/*

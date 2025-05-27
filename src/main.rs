@@ -8,30 +8,30 @@ mod parser;
 
 const TEST_INPUT: &'static str = "
 rec vec {
-	x:fd
-	y:fd
+	x:fd,
+	y:fd,
 }
 
 rec quat {
-	s:fd
-	v:fd
+	s:fd,
+	v:fd,
 }
 
 fn main() {
 	var x:fd12 = 0.44
 	var y:fd12 = 0.01
 
-	var p = vec {x   y}
-	var q = vec {1.5 2.6}
+	var p = vec {x:x, y:y}
+	var q = vec {x:1.5, y:2.6}
 
-	fn vmul(a:vec b:vec) -> quat {
+	fn vmul(a:vec, b:vec) -> quat {
 		quat {
-			a.x * b.x + a.y * b.y
-			a.x * b.y - b.x * a.y
+			s: a.x * b.x + a.y * b.y,
+			v: a.x * b.y - b.x * a.y,
 		}
 	}
 
-	vmul(p q)
+	vmul(p, q)
 }";
 
 use clap::Parser;

@@ -90,14 +90,6 @@ impl Tester {
 	) -> NodeId {
 		self.1.new_while(cond, body.to_vec(), 0..0)
 	}
-
-	fn assign(
-		&mut self,
-		name: &str,
-		body: NodeId,
-	) -> NodeId {
-		self.1.new_assign(name.into(), body, 0..0)
-	}
 }
 
 fn expr_test(source: &str, tester: &Tester) -> miette::Result<()> {
@@ -234,10 +226,6 @@ fn assert_nodes(nxa: NodeId, sa: &NodeStore, nxb: NodeId, sb: &NodeStore) {
 					assert_nodes(*a, sa, *b, sb);
 				}
 			}
-			(Expr::Assign { name: na, body: ba }, Expr::Assign { name: nb, body: bb }) => {
-				assert_eq!(na, nb);
-				assert_nodes(*ba, sa, *bb, sb);
-			}
 			(Expr::Unary { op: oa, rhs: ra }, Expr::Unary { op: ob, rhs: rb }) => {
 				assert_eq!(oa, ob);
 				assert_nodes(*ra, sa, *rb, sb);
@@ -348,7 +336,17 @@ fn fn_stmt_params() -> miette::Result<()> {
 		("d".into(), VT::to_f16(6)),
 		("e".into(), VT::to_f32(10)),
 	], VT::Unit, &[]);
-	parse_test("fn a(b:u8 c:s16 d:fw6 e:fd10) {}", &t.finish())
+	parse_test("fn a(b:u8, c:s16, d:fw6, e:fd10) {}", &t.finish())
+}
+
+#[test]
+fn fn_stmt_params_trailing_comma() -> miette::Result<()> {
+	let mut t = Tester::default();
+	t.0 = t.fun("a", &[
+		("b".into(), VT::to_u8()),
+		("c".into(), VT::to_s16()),
+	], VT::Unit, &[]);
+	parse_test("fn a(b:u8, c:s16, ) {}", &t.finish())
 }
 
 #[test]
@@ -361,7 +359,7 @@ fn fn_stmt_rtype_simple() -> miette::Result<()> {
 #[test]
 fn fn_stmt_rtype_udt() -> miette::Result<()> {
 	let mut t = Tester::default();
-	t.0 = t.fun("a", &[], VT::UDT("b".to_string()), &[]);
+	t.0 = t.fun("a", &[], VT::UDT("b".into()), &[]);
 	parse_test("fn a() -> b {}", &t.finish())
 }
 
@@ -397,7 +395,17 @@ fn rec_stmt_fields() -> miette::Result<()> {
 		("x".into(), VT::to_f32(16)),
 		("y".into(), VT::to_f32(16)),
 	]);
-	parse_test("rec vec{x:fd y:fd}", &t.finish())
+	parse_test("rec vec{x:fd, y:fd}", &t.finish())
+}
+
+#[test]
+fn rec_stmt_fields_trailing_comma() -> miette::Result<()> {
+	let mut t = Tester::default();
+	t.0 = t.rec("vec", &[
+		("x".into(), VT::to_f32(16)),
+		("y".into(), VT::to_f32(16)),
+	]);
+	parse_test("rec vec{ x:fd, y:fd, }", &t.finish())
 }
 
 #[test]
@@ -445,8 +453,9 @@ fn while_stmt() -> miette::Result<()> {
 #[test]
 fn assign_stmt() -> miette::Result<()> {
 	let mut t = Tester::default();
+	let a = t.ident("a");
 	let n3 = t.num(3);
-	t.0 = t.assign("a", n3);
+	t.0 = t.binary(BinaryOp::Assign, a, n3)?;
 	parse_test("a = 3", &t.finish())
 }
 

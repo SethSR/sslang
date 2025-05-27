@@ -1,5 +1,6 @@
 
 use std::fmt;
+use std::rc::Rc;
 
 // TODO - srenshaw - Create a more robust type system. (Probably based on github.com/SeaOfNodes)
 
@@ -169,7 +170,7 @@ pub(crate) enum ValueType {
 	/// All User Defined Types
 	///
 	/// UDTs are stored in a type-cache in parser::Parser.
-	UDT(String),
+	UDT(Rc<str>),
 	/// Bottom type
 	Unit,
 }

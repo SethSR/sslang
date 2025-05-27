@@ -51,7 +51,7 @@ impl NodeStore {
 		fields: Vec<TypedIdent>,
 		info: TokenInfo,
 	) -> NodeId {
-		let udt = name.to_string();
+		let udt = Rc::clone(&name);
 		self.add(Node::new(Expr::Rec { name, fields }, ValueType::UDT(udt), info))
 	}
 
@@ -106,13 +106,14 @@ impl NodeStore {
 		self.add(Node::new(Expr::While { cond, body }, ValueType::Unit, info))
 	}
 
-	pub(super) fn new_assign(
+	pub(super) fn new_rec_init(
 		&mut self,
 		name: Rc<str>,
-		body: NodeId,
+		field_inits: Vec<(Rc<str>, NodeId)>,
 		info: TokenInfo,
 	) -> NodeId {
-		self.add(Node::new(Expr::Assign { name, body }, ValueType::Unit, info))
+		let udt = Rc::clone(&name);
+		self.add(Node::new(Expr::RecInit { name, field_inits }, ValueType::UDT(udt), info))
 	}
 
 	pub(super) fn new_unary(
@@ -220,9 +221,9 @@ pub(crate) enum Expr {
 		cond: NodeId,
 		body: Vec<NodeId>,
 	},
-	Assign {
+	RecInit {
 		name: Rc<str>,
-		body: NodeId,
+		field_inits: Vec<(Rc<str>, NodeId)>,
 	},
 	Unary {
 		op: UnaryOp,
@@ -243,17 +244,17 @@ impl fmt::Display for Expr {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
 		match self {
 			Expr::While { cond, body }              => write!(fmt, "(while {cond} {body:?})"),
-			Expr::Assign { name, body }             => write!(fmt, "({name} = {body})"),
 			Expr::Num(n)                            => write!(fmt, "{n}"),
 			Expr::Id(s)                             => write!(fmt, "{s}"),
 			Expr::Block(b)                          => write!(fmt, "{b:?}"),
+			Expr::RecInit { name, field_inits }     => write!(fmt, "(init {name} {field_inits:?})"),
 			Expr::Unary { op, rhs }                 => write!(fmt, "({op} {rhs})"),
 			Expr::Binary { op, lhs, rhs }           => write!(fmt, "({op} {lhs} {rhs})"),
-			Expr::Var { name, body }                => write!(fmt, "(var {name} = {body}"),
+			Expr::Var { name, body }                => write!(fmt, "(var {name} = {body})"),
 			Expr::If { cond, bt, bf }               => write!(fmt, "(if {cond} {bt:?} {bf:?})"),
-			Expr::FnCall { name, args }             => write!(fmt, "{name}({args:?})"),
+			Expr::FnCall { name, args }             => write!(fmt, "(call {name} {args:?})"),
 			Expr::Rec { name, fields }              => write!(fmt, "(rec {name} {fields:?})"),
-			Expr::Fun { name, params, rtype, body } => write!(fmt, "(fn {name} ({params:?}) -> {rtype} {body:?})"),
+			Expr::Fun { name, params, rtype, body } => write!(fmt, "(fn {name} {params:?} -> {rtype} {body:?})"),
 		}
 	}
 }

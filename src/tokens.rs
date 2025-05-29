@@ -19,14 +19,17 @@ pub(crate) enum TokenType {
 	Var,   // 'var'
 	Else,  // 'else'
 	While, // 'while'
+	True,  // 'true'
+	False, // 'false'
 
 	// Value Types
-	U8,  // u8
-	U16, // u16
-	U32, // u32
-	S8,  // s8
-	S16, // s16
-	S32, // s32
+	Bool, // bool
+	U8,   // u8
+	U16,  // u16
+	U32,  // u32
+	S8,   // s8
+	S16,  // s16
+	S32,  // s32
 	F16(Rc<str>), // fw[0-9]*
 	F32(Rc<str>), // fd[0-9]*
 
@@ -102,9 +105,9 @@ impl Token {
 			TT::U16 | TT::U32 |
 			TT::S16 | TT::S32 => 3,
 
-			TT::Else => 4,
+			TT::Else | TT::True | TT::Bool => 4,
 
-			TT::While => 5,
+			TT::While | TT::False => 5,
 
 			TT::Ident(s) | TT::Integer(s) | TT::Fixed(s) |
 			TT::F16(s) | TT::F32(s) => s.len(),

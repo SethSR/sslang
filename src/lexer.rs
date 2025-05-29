@@ -170,6 +170,9 @@ impl<'a> Iterator for Lexer<'a> {
 						"var"   => TokenType::Var,
 						"else"  => TokenType::Else,
 						"while" => TokenType::While,
+						"true"  => TokenType::True,
+						"false" => TokenType::False,
+						"bool"  => TokenType::Bool,
 						"u8"    => TokenType::U8,
 						"u16"   => TokenType::U16,
 						"u32"   => TokenType::U32,
@@ -284,19 +287,22 @@ mod tokenizes {
 
 	#[test]
 	fn keywords() -> miette::Result<()> {
-		lex_test("var fn rec if while else", &[
+		lex_test("var fn rec if while else true false", &[
 			TokenType::Var,
 			TokenType::Fun,
 			TokenType::Rec,
 			TokenType::If,
 			TokenType::While,
 			TokenType::Else,
+			TokenType::True,
+			TokenType::False,
 		])
 	}
 
 	#[test]
 	fn value_types() -> miette::Result<()> {
-		lex_test("u8 u16 u32 s8 s16 s32 fw fw4 fd fd22", &[
+		lex_test("bool u8 u16 u32 s8 s16 s32 fw fw4 fd fd22", &[
+			TokenType::Bool,
 			TokenType::U8,
 			TokenType::U16,
 			TokenType::U32,

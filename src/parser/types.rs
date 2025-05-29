@@ -163,6 +163,8 @@ pub(crate) enum ValueType {
 	// Used for function calls, we'll resolve these later
 	/// Any type - also used for unknown/unresolved types during compilation
 	Any,
+	/// Boolean type
+	Bool,
 	/// All integer types
 	Int(Int),
 	/// All Fixed-point types
@@ -214,21 +216,31 @@ impl Meet for ValueType {
 		match (self, rhs) {
 			(Self::Unit, _) | (_, Self::Unit) => Self::Unit,
 
+			(Self::Bool, Self::Bool) => Self::Bool,
+			(Self::Bool, Self::Int(_)) => Self::Unit,
+			(Self::Bool, Self::Fix(_)) => Self::Unit,
+			(Self::Bool, Self::UDT(_)) => Self::Unit,
+			(Self::Bool, Self::Any) => Self::Bool,
+
+			(Self::Int(_), Self::Bool) => Self::Unit,
 			(Self::Int(a), Self::Int(b)) => Self::Int(a.meet(b)),
 			(Self::Int(_), Self::Fix(_)) => Self::Unit,
 			(Self::Int(_), Self::UDT(_)) => Self::Unit,
 			(Self::Int(int), Self::Any) => Self::Int(*int),
 
+			(Self::Fix(_), Self::Bool) => Self::Unit,
 			(Self::Fix(_), Self::Int(_)) => Self::Unit,
 			(Self::Fix(a), Self::Fix(b)) => Self::Fix(a.meet(b)),
 			(Self::Fix(_), Self::UDT(_)) => Self::Unit,
 			(Self::Fix(fix), Self::Any) => Self::Fix(*fix),
 
+			(Self::UDT(_), Self::Bool) => Self::Unit,
 			(Self::UDT(_), Self::Int(_)) => Self::Unit,
 			(Self::UDT(_), Self::Fix(_)) => Self::Unit,
 			(Self::UDT(_), Self::UDT(_)) => Self::Unit,
 			(Self::UDT(udt), Self::Any) => Self::UDT(udt.clone()),
 
+			(Self::Any, Self::Bool) => Self::Unit,
 			(Self::Any, Self::Int(_)) => Self::Unit,
 			(Self::Any, Self::Fix(_)) => Self::Unit,
 			(Self::Any, Self::UDT(_)) => Self::Unit,
@@ -242,6 +254,7 @@ impl fmt::Display for ValueType {
 		use ValueType as VT;
 
 		match self {
+			VT::Bool => write!(fmt, "bool"),
 			VT::Int(int) => write!(fmt, "{int}"),
 			VT::Fix(fix) => write!(fmt, "{fix}"),
 			VT::UDT(s) => write!(fmt, "{s}"),

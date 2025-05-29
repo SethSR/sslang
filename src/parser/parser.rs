@@ -143,8 +143,9 @@ fn infix_binding_power(tt: &TokenType) -> Option<(u8,u8)> {
 		// Keywords
 		TT::If | TT::Else |
 		TT::Fun | TT::Rec | TT::Var |
-		TT::While |
+		TT::While | TT::True | TT::False |
 		// Type Tokens
+		TT::Bool |
 		TT::U8 | TT::U16 | TT::U32 |
 		TT::S8 | TT::S16 | TT::S32 |
 		TT::F16(_) | TT::F32(_) |

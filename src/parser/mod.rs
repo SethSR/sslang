@@ -17,13 +17,12 @@ pub(crate) use types::{Meet, ValueType};
 pub(crate) use operators::{BinaryOp, UnaryOp};
 pub(crate) use node::{Expr, Node, NodeId};
 
+pub(crate) type TokenInfo = Range<usize>;
 pub(crate) type TypedIdent = (Rc<str>, ValueType);
+pub(crate) type NodeMap = HashMap<NodeId, Node>;
 
 use parser::Parser;
 use types::{Fix, Int};
-
-type TokenInfo = Range<usize>;
-pub(crate) type NodeMap = HashMap<NodeId, Node>;
 
 pub fn eval(
 	source: &str,

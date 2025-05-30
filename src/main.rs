@@ -2,9 +2,11 @@
 use miette::IntoDiagnostic;
 use tracing::{info,debug};
 
+mod checker;
 mod tokens;
 mod lexer;
 mod parser;
+mod reducer;
 
 const TEST_INPUT: &'static str = "
 rec vec {
@@ -40,6 +42,8 @@ use clap::Parser;
 enum Stage {
 	Lexer,
 	Parser,
+	Checker,
+	Reducer,
 }
 
 impl From<String> for Stage {
@@ -47,6 +51,8 @@ impl From<String> for Stage {
 		match s.to_lowercase().as_str() {
 			"lexer" => Self::Lexer,
 			"parser" => Self::Parser,
+			"checker" => Self::Checker,
+			"reducer" => Self::Reducer,
 			_ => unimplemented!(),
 		}
 	}
@@ -56,6 +62,9 @@ impl From<String> for Stage {
 struct Options {
 	#[arg(short,long)]
 	debug: Vec<Stage>,
+
+	#[arg(short,long,default_value_t=tracing::Level::INFO)]
+	level: tracing::Level,
 
 	#[arg(short,long,default_value_t=String::from("a.out"))]
 	output_file: String,
@@ -68,10 +77,9 @@ fn main() -> miette::Result<()> {
 	options.debug.dedup();
 
 	tracing_subscriber::fmt()
-		.without_time()
-		//.with_file(false)
-		.with_max_level(tracing::Level::TRACE)
 		.compact()
+		.with_max_level(options.level)
+		.without_time()
 		.init();
 
 	/*
@@ -87,14 +95,32 @@ fn main() -> miette::Result<()> {
 
 	info!("lexing");
 	let tokens = lexer::eval(&source)?;
-	debug!("Tokens: [{}]", tokens.iter()
-		.map(|t| t.to_string())
-		.collect::<Vec<_>>()
-		.join(", "));
+	if options.debug.contains(&Stage::Lexer) {
+		let token_str = tokens.iter()
+			.map(|t| t.to_string())
+			.collect::<Vec<_>>()
+			.join(", ");
+		debug!("Tokens: [{token_str}]");
+	}
+
 	info!("parsing");
 	let (start, ast) = parser::eval(&source, tokens)?;
-	debug!("Start ID: {start}");
-	debug!("AST: {ast:?}");
+	if options.debug.contains(&Stage::Parser) {
+		debug!("Start ID: {start}");
+		debug!("AST: {ast:?}");
+	}
+
+	info!("type-checking");
+	let ast = checker::eval(ast);
+	if options.debug.contains(&Stage::Checker) {
+		debug!("checked AST: {ast:?}");
+	}
+
+	// info!("reduction");
+	// let ast = reducer::eval(ast);
+	// if options.debug.contains(&Stage::Reducer) {
+		// debug!("reduced AST: {ast:?}");
+	// }
 
 	let output = format!("Start ID: {start}\nAST: {ast:?}");
 

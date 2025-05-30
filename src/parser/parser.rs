@@ -58,7 +58,6 @@ pub(super) struct Parser<'a,'b> {
 	pub(super) nodes: NodeStore,
 
 	// DEBUG
-	pub(super) constant_folding: bool,
 	dbg_depth: usize,
 }
 
@@ -71,7 +70,6 @@ impl<'a,'b> Parser<'a,'b> {
 
 			nodes: NodeStore::default(),
 
-			constant_folding: true,
 			dbg_depth: 2,
 		}
 	}
@@ -343,6 +341,9 @@ impl Parser<'_,'_> {
 			TT::Var => self.stmt_var()?,
 			TT::While => self.stmt_while()?,
 
+			TT::True => Node::new_bool(true, left_token.range()),
+			TT::False => Node::new_bool(false, left_token.range()),
+
 			TT::Ident(ref s) => {
 				// HACK - srenshaw - We probably need a more robust way to distinguish between Record
 				// initialization, "ident -> block" sequences, and assignement.
@@ -384,13 +385,8 @@ impl Parser<'_,'_> {
 				};
 				self.index += 1;
 				let rhs = self.expr(r_bp)?;
-				let id = self.nodes.new_unary((&left_token.tt).try_into()?, rhs, left_token.range())
+				self.nodes.new_unary((&left_token.tt).try_into()?, rhs, left_token.range())
 					.map_err(|err| err.with_source_code(self.source.to_string()))?;
-				if self.constant_folding {
-					self.nodes.simplify(id)
-				} else {
-					id
-				}
 			}
 
 			TT::EOF => return error!(eof, self,
@@ -448,9 +444,6 @@ impl Parser<'_,'_> {
 				let op: BinaryOp = (&op_token.tt).try_into()?;
 				let rhs = self.expr(r_bp)?;
 				lhs = self.nodes.new_binary(op, lhs, rhs, op_token.range())?;
-				if self.constant_folding {
-					lhs = self.nodes.simplify(lhs);
-				}
 				continue;
 			}
 

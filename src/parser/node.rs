@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use super::{BinaryOp, Meet, TokenInfo, TypedIdent, UnaryOp, ValueType};
 
+<<<<<<< HEAD
 pub(crate) type NodeId = usize;
 
 #[derive(Debug, Default)]
@@ -34,11 +35,15 @@ impl NodeStore {
 }
 
 impl NodeStore {
-	pub(super) fn new_block(&mut self, b: Vec<NodeId>, info: TokenInfo) -> NodeId {
+	pub(crate) fn new_block(&mut self, b: Vec<NodeId>, info: TokenInfo) -> NodeId {
 		self.add(Node::new(Expr::Block(b), ValueType::Unit, info))
 	}
 
-	pub(super) fn new_id(
+	pub(crate) fn new_bool(b: bool, info: TokenInfo) -> Node {
+		Node::new(Expr::Bool(b), ValueType::Bool, info)
+	}
+
+	pub(crate) fn new_id(
 		&mut self,
 		s: Rc<str>,
 		kind: ValueType,
@@ -47,7 +52,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::Id(s.into()), kind, info))
 	}
 
-	pub(super) fn new_num(
+	pub(crate) fn new_num(
 		&mut self,
 		n: i64,
 		kind: ValueType,
@@ -56,7 +61,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::Num(n), kind, info))
 	}
 
-	pub(super) fn new_rec(
+	pub(crate) fn new_rec(
 		&mut self,
 		name: Rc<str>,
 		fields: Vec<TypedIdent>,
@@ -66,7 +71,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::Rec { name, fields }, ValueType::UDT(udt), info))
 	}
 
-	pub(super) fn new_fun(
+	pub(crate) fn new_fun(
 		&mut self,
 		name: Rc<str>,
 		params: Vec<TypedIdent>,
@@ -78,7 +83,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::Fun { name, params, rtype, body }, kind, info))
 	}
 
-	pub(super) fn new_var(
+	pub(crate) fn new_var(
 		&mut self,
 		name: Rc<str>,
 		vtype: ValueType,
@@ -88,7 +93,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::Var { name, body }, vtype, info))
 	}
 
-	pub(super) fn new_if(
+	pub(crate) fn new_if(
 		&mut self,
 		cond: NodeId,
 		bt: Vec<NodeId>,
@@ -108,7 +113,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::If { cond, bt, bf }, kind, info))
 	}
 
-	pub(super) fn new_while(
+	pub(crate) fn new_while(
 		&mut self,
 		cond: NodeId,
 		body: Vec<NodeId>,
@@ -117,7 +122,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::While { cond, body }, ValueType::Unit, info))
 	}
 
-	pub(super) fn new_rec_init(
+	pub(crate) fn new_rec_init(
 		&mut self,
 		name: Rc<str>,
 		field_inits: Vec<(Rc<str>, NodeId)>,
@@ -127,7 +132,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::RecInit { name, field_inits }, ValueType::UDT(udt), info))
 	}
 
-	pub(super) fn new_unary(
+	pub(crate) fn new_unary(
 		&mut self,
 		op: UnaryOp,
 		rhs: NodeId,
@@ -137,7 +142,7 @@ impl NodeStore {
 		Ok(self.add(Node::new(Expr::Unary { op, rhs }, kind, info)))
 	}
 
-	pub(super) fn new_binary(
+	pub(crate) fn new_binary(
 		&mut self,
 		op: BinaryOp,
 		lhs: NodeId,
@@ -150,7 +155,7 @@ impl NodeStore {
 		Ok(self.add(Node::new(Expr::Binary { op, lhs, rhs }, kind, info)))
 	}
 
-	pub(super) fn new_call(
+	pub(crate) fn new_call(
 		&mut self,
 		name: Rc<str>,
 		args: Vec<NodeId>,
@@ -198,7 +203,14 @@ impl NodeStore {
 		}
 	}
 
-	fn simplify_binary(&mut self, op: BinaryOp, lhs: NodeId, rhs: NodeId, kind: ValueType, info: TokenInfo) -> Option<NodeId> {
+	fn simplify_binary(
+		&mut self,
+		op: BinaryOp,
+		lhs: NodeId,
+		rhs: NodeId,
+		kind: ValueType,
+		info: TokenInfo,
+	) -> Option<NodeId> {
 		let vt = kind.clone();
 		let ti = info.clone();
 		let reduce = |lhs, rhs, f: fn(i64,i64) -> i64| {
@@ -253,7 +265,13 @@ impl NodeStore {
 		}
 	}
 
-	fn simplify_add(&mut self, lhs: NodeId, rhs: NodeId, kind: ValueType, info: TokenInfo) -> Option<NodeId> {
+	fn simplify_add(
+		&mut self,
+		lhs: NodeId,
+		rhs: NodeId,
+		kind: ValueType,
+		info: TokenInfo,
+	) -> Option<NodeId> {
 		let lnode = self.get(lhs).ok()?.clone();
 		let rnode = self.get(rhs).ok()?.clone();
 		match (&lnode.expr, &rnode.expr) {
@@ -292,7 +310,13 @@ impl NodeStore {
 		}
 	}
 
-	fn simplify_mul(&mut self, lhs: NodeId, rhs: NodeId, kind: ValueType, info: TokenInfo) -> Option<NodeId> {
+	fn simplify_mul(
+		&mut self,
+		lhs: NodeId,
+		rhs: NodeId,
+		kind: ValueType,
+		info: TokenInfo,
+	) -> Option<NodeId> {
 		let lnode = self.get(lhs).ok()?.clone();
 		let rnode = self.get(rhs).ok()?.clone();
 		match (&lnode.expr, &rnode.expr) {
@@ -355,6 +379,7 @@ impl fmt::Display for Node {
 pub(crate) enum Expr {
 	Num(i64),
 	Id(Rc<str>),
+	Bool(bool),
 	Block(Vec<NodeId>),
 	Rec {
 		name: Rc<str>,
@@ -401,10 +426,11 @@ pub(crate) enum Expr {
 impl fmt::Display for Expr {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
 		match self {
-			Expr::While { cond, body }              => write!(fmt, "(while {cond} {body:?})"),
 			Expr::Num(n)                            => write!(fmt, "{n}"),
 			Expr::Id(s)                             => write!(fmt, "{s}"),
+			Expr::Bool(b)                           => write!(fmt, "{b}"),
 			Expr::Block(b)                          => write!(fmt, "{b:?}"),
+			Expr::While { cond, body }              => write!(fmt, "(while {cond} {body:?})"),
 			Expr::RecInit { name, field_inits }     => write!(fmt, "(init {name} {field_inits:?})"),
 			Expr::Unary { op, rhs }                 => write!(fmt, "({op} {rhs})"),
 			Expr::Binary { op, lhs, rhs }           => write!(fmt, "({op} {lhs} {rhs})"),

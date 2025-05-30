@@ -1,194 +1,174 @@
 
-use std::ops::Range;
-
-use tracing::warn;
-
 use crate::parser::{BinaryOp, Expr, Node, UnaryOp};
-use crate::parser::{Meet, ValueType};
+use crate::parser::{ValueType, TokenInfo};
 
-pub(crate) fn eval(
-	ast: Vec<Node>,
-	mut limit: u32,
-) -> Vec<Node> {
-	let mut prev = ast;
-	loop {
-		let out = prev.iter()
-			.cloned()
-			.map(expr)
-			.collect();
-		if out == prev {
-			break out;
-		}
-		prev = out;
-		limit -= 1;
-		if limit <= 0 {
-			warn!("reducer limit exceeded");
-			break prev;
-		}
-	}
-}
-
-fn expr(s: Node) -> Node {
-	match *s.expr {
-		Expr::If { cond, bt, bf } => Node::new_if(expr(cond), reduce_list(bt), reduce_list(bf), s.info),
-		Expr::While { cond, body } => Node::new_while(expr(cond), reduce_list(body), s.info),
-		Expr::Var { name, body } => Node::new_var(name, s.kind, expr(body), s.info),
-		Expr::Rec {..} => s,
-		Expr::Fun { name, params, rtype, body } => Node::new_fun(
-			name,
-			params,
-			rtype,
+pub(crate) fn eval(node: Node) -> Node {
+	match &*node.expr {
+		// Expr::If { cond, bt, bf } => Node::new_if(eval(cond), reduce_list(bt), reduce_list(bf), s.info),
+		// Expr::While { cond, body } => Node::new_while(expr(cond), reduce_list(body), s.info),
+		// Expr::Var { name, body } => Node::new_var(name, node.kind, expr(body), s.info),
+		// Expr::Rec {..} => node,
+		/* Expr::Fun { name, params, rtype, body } => Node::new_fun(
+			std::rc::Rc::clone(name),
+			params.to_vec(),
+			rtype.clone(),
 			reduce_list(body),
-			s.info,
-		),
-		Expr::Assign { name, body } => Node::new_assign(name, expr(body), s.info),
-		Expr::Num(_) => s,
-		Expr::Id(_) => s,
-		Expr::Block(b) => Node::new_block(reduce_list(b), s.info),
-		Expr::Unary { op, rhs } => unary(op, expr(rhs), s.info),
-		Expr::Binary { op, lhs, rhs } => binary(op, expr(lhs), expr(rhs), s.info),
-		Expr::FnCall { name, args } => Node::new_call(name, reduce_list(args), s.info),
+			node.info,
+		), */
+		// Expr::Num(_) => node,
+		// Expr::Id(_) => node,
+		// Expr::Block(b) => Node::new_block(reduce_list(b), s.info),
+		Expr::Unary { op, rhs } => simplify_unary(*op, rhs).unwrap_or(node),
+		Expr::Binary { op, lhs, rhs } => simplify_binary(*op, lhs, rhs,
+			node.kind.clone(), node.info.clone()).unwrap_or(node),
+		// Expr::FnCall { name, args } => Node::new_call(name, reduce_list(args), s.info),
+		_ => node,
 	}
 }
 
-fn reduce_list(nodes: Vec<Node>) -> Vec<Node> {
-	nodes.into_iter().map(expr).collect()
-}
-
-fn unary(op: UnaryOp, s: Node, info: Range<usize>) -> Node {
+fn simplify_unary(op: UnaryOp, rhs: &Node) -> Option<Node> {
 	match op {
-		UnaryOp::Neg => if let Expr::Num(n) = *s.expr {
-			Node::new(Expr::Num(-n), s.kind, info)
-		} else {
-			Node::new_unary(op, s, info)
+		UnaryOp::Pos => Some(rhs.clone()),
+		UnaryOp::Neg => {
+			match &*rhs.expr {
+				Expr::Num(a) => Some(Node::new_num(-a, rhs.kind.clone(), rhs.info.clone())),
+				_ => None,
+			}
 		}
-		UnaryOp::Not => if let Expr::Num(n) = *s.expr {
-			Node::new(Expr::Num(!n), s.kind, info)
-		} else {
-			Node::new_unary(op, s, info)
+		UnaryOp::Not => {
+			match &*rhs.expr {
+				Expr::Num(a) => Some(Node::new_num(!a, rhs.kind.clone(), rhs.info.clone())),
+				_ => None,
+			}
 		}
-		UnaryOp::Pos => s,
-		UnaryOp::Deref |
-		UnaryOp::Ref => Node::new_unary(op, s, info),
+		_ => None,
 	}
 }
 
-fn collapse_binop(
-	f: fn(i64,i64) -> i64,
+fn simplify_binary(
 	op: BinaryOp,
-	lhs: Node,
-	rhs: Node,
-	info: Range<usize>,
-) -> Node {
-	match (*lhs.expr, *rhs.expr) {
-		(Expr::Num(n0), Expr::Num(n1)) => Node::new(Expr::Num(f(n0,n1)), ValueType::Unit, info),
-		(lex, rex) => Node::new_binary(
-			op,
-			Node::new(lex, lhs.kind, lhs.info),
-			Node::new(rex, rhs.kind, rhs.info),
-			info,
-		),
+	lhs: &Node,
+	rhs: &Node,
+	kind: ValueType,
+	info: TokenInfo,
+) -> Option<Node> {
+	let vt = kind.clone();
+	let ti = info.clone();
+	let reduce = |lhs: &Node, rhs: &Node, f: fn(i64,i64) -> i64| {
+		match (&*lhs.expr, &*rhs.expr) {
+			(Expr::Num(a), Expr::Num(b)) => Some(Node::new_num(f(*a,*b), vt, ti)),
+			_ => None,
+		}
+	};
+
+	match op {
+		BinaryOp::Accessor => None, // TODO - srenshaw - Add simplify code for Accessor operator.
+		BinaryOp::Add => simplify_add(lhs, rhs, kind, info),
+		BinaryOp::AndB => reduce(lhs, rhs, |a,b| a & b),
+		BinaryOp::AndL => reduce(lhs, rhs, |a,b| ((a != 0) && (b != 0)) as i64),
+		// TODO - srenshaw - Assigns should get converted into scope
+		// insertions before we reach this point.
+		BinaryOp::Assign => None,
+		BinaryOp::CmpEq => reduce(lhs, rhs, |a,b| (a == b) as i64),
+		BinaryOp::CmpNE => reduce(lhs, rhs, |a,b| (a != b) as i64),
+		BinaryOp::CmpGE => reduce(lhs, rhs, |a,b| (a >= b) as i64),
+		BinaryOp::CmpGT => reduce(lhs, rhs, |a,b| (a >  b) as i64),
+		BinaryOp::CmpLE => reduce(lhs, rhs, |a,b| (a <= b) as i64),
+		BinaryOp::CmpLT => reduce(lhs, rhs, |a,b| (a <  b) as i64),
+		// TODO - srenshaw - Check whether commas are actually used as binary-operators, and whether
+		// they can be handled before this point.
+		BinaryOp::Comma => None,
+		// TODO - srenshaw - Need to deal with div-by-zero
+
+		// TODO - srenshaw - Remember to read the Hitachi manual for info on how to do "automatic"
+		// division processing. (SH7604 Hardware Manual, pg 289)
+		BinaryOp::Div => reduce(lhs, rhs, |a,b| a / b),
+		// TODO - srenshaw - DivMod will need special-case handling as it "returns" 2 values.
+		BinaryOp::DivMod => None,
+		// TODO - srenshaw - Should probably do constant checking on left-rotates.
+		BinaryOp::LRot => reduce(lhs, rhs, |a,b| a.rotate_left(b as u32)),
+		// TODO - srenshaw - Should probably do constant checking on left-shifts.
+		BinaryOp::LShift => reduce(lhs, rhs, |a,b| a << b),
+		// TODO - srenshaw - Need to deal with div-by-zero
+		BinaryOp::Mod => reduce(lhs, rhs, |a,b| a % b),
+		BinaryOp::Mul => simplify_mul(lhs, rhs, kind, info),
+		BinaryOp::OrB => reduce(lhs, rhs, |a,b| a | b),
+		BinaryOp::OrL => reduce(lhs, rhs, |a,b| ((a != 0) || (b != 0)) as i64),
+		// TODO - srenshaw - Should probably do constant checking on right-rotates.
+		BinaryOp::RRot => reduce(lhs, rhs, |a,b| a.rotate_right(b as u32)),
+		// TODO - srenshaw - Should probably do constant checking on right-shifts.
+		BinaryOp::RShift => reduce(lhs, rhs, |a,b| a >> b),
+		BinaryOp::Sub => reduce(lhs, rhs, |a,b| a - b),
+		BinaryOp::XorB => reduce(lhs, rhs, |a,b| a ^ b),
+		BinaryOp::XorL => reduce(lhs, rhs, |a,b| ((a != 0) ^ (b != 0)) as i64),
 	}
 }
 
-fn binary(op: BinaryOp, lhs: Node, rhs: Node, info: Range<usize>) -> Node {
-	let kind = lhs.kind.meet(&rhs.kind);
-	match op {
-		BinaryOp::Add => match ((*lhs.expr).clone(), (*rhs.expr).clone()) {
-			(Expr::Num(n0), Expr::Num(n1)) => Node::new(Expr::Num(n0 + n1), kind, info),
-			(s_0, Expr::Num(n1)) => if let Expr::Binary { op: BinaryOp::Add, lhs: lhs0, rhs: lhs1 } = s_0 {
-				// ((lhs0 + lhs1) + rhs)
-				match (*lhs0.expr, *lhs1.expr) {
-					(Expr::Num(n00), s_01) => Node::new_binary(
-						BinaryOp::Add,
-						Node::new(s_01, lhs1.kind, lhs1.info),
-						Node::new(
-							Expr::Num(n00 + n1),
-							lhs0.kind.meet(&rhs.kind),
-							lhs0.info.start..rhs.info.end,
-						),
-						info,
-					),
-					(s_00, Expr::Num(n01)) => Node::new_binary(
-						BinaryOp::Add,
-						Node::new(s_00, lhs0.kind, lhs0.info),
-						Node::new(
-							Expr::Num(n01 + n1),
-							lhs1.kind.meet(&rhs.kind),
-							lhs1.info.start..rhs.info.end,
-						),
-						info,
-					),
-					_ => Node::new_binary(BinaryOp::Add, lhs, rhs, info),
-				}
-			} else {
-				Node::new_binary(op, lhs, rhs, info)
-			}
-			_ => Node::new_binary(op, lhs, rhs, info),
-		}
-		BinaryOp::AndB =>
-			collapse_binop(|n0,n1| n0 & n1, op, lhs, rhs, info),
-		BinaryOp::AndL =>
-			collapse_binop(|n0,n1| (n0 != 0 && n1 != 0) as i64, op, lhs, rhs, info),
-		BinaryOp::CmpEq =>
-			collapse_binop(|n0,n1| (n0 == n1) as i64, op, lhs, rhs, info),
-		BinaryOp::CmpGE =>
-			collapse_binop(|n0,n1| (n0 >= n1) as i64, op, lhs, rhs, info),
-		BinaryOp::CmpGT =>
-			collapse_binop(|n0,n1| (n0 > n1) as i64, op, lhs, rhs, info),
-		BinaryOp::CmpLE =>
-			collapse_binop(|n0,n1| (n0 <= n1) as i64, op, lhs, rhs, info),
-		BinaryOp::CmpLT =>
-			collapse_binop(|n0,n1| (n0 < n1) as i64, op, lhs, rhs, info),
-		BinaryOp::CmpNE =>
-			collapse_binop(|n0,n1| (n0 != n1) as i64, op, lhs, rhs, info),
-		BinaryOp::Div =>
-			collapse_binop(|n0,n1| n0 / n1, op, lhs, rhs, info),
-		BinaryOp::LShift =>
-			collapse_binop(|n0,n1| n0 << n1, op, lhs, rhs, info),
-		BinaryOp::Mod =>
-			collapse_binop(|n0,n1| n0 % n1, op, lhs, rhs, info),
-		BinaryOp::Mul =>
-			collapse_binop(|n0,n1| n0 * n1, op, lhs, rhs, info),
-		BinaryOp::OrB =>
-			collapse_binop(|n0,n1| n0 | n1, op, lhs, rhs, info),
-		BinaryOp::OrL =>
-			collapse_binop(|n0,n1| (n0 != 0 || n1 != 0) as i64, op, lhs, rhs, info),
-		BinaryOp::RShift =>
-			collapse_binop(|n0,n1| n0 >> n1, op, lhs, rhs, info),
-		BinaryOp::Sub => match ((*lhs.expr).clone(), (*rhs.expr).clone()) {
-			(Expr::Num(n0), Expr::Num(n1)) => Node::new(
-				Expr::Num(n0 - n1),
-				lhs.kind.meet(&rhs.kind),
-				info,
-			),
-			(_, Expr::Num(n1)) => Node::new_binary(
-				BinaryOp::Add,
-				lhs,
-				Node::new(Expr::Num(-n1), rhs.kind, rhs.info),
-				info,
-			),
-			_ => {
-				let rinfo = rhs.info.clone();
-				Node::new_binary(
-					BinaryOp::Add,
-					lhs,
-					Node::new_unary(UnaryOp::Neg, rhs, rinfo),
-					info,
-				)
-			}
-		}
-		BinaryOp::XorB =>
-			collapse_binop(|n0,n1| n0 ^ n1, op, lhs, rhs, info),
-		BinaryOp::XorL =>
-			collapse_binop(|n0,n1| ((n0 != 0) ^ (n1 != 0)) as i64, op, lhs, rhs, info),
+fn simplify_add(
+	lhs: &Node,
+	rhs: &Node,
+	kind: ValueType,
+	info: TokenInfo,
+) -> Option<Node> {
+	match (&*lhs.expr, &*rhs.expr) {
+		// Collapse 'unit' values
+		(Expr::Id(_), Expr::Num(0)) => Some(lhs.clone()),
 
-		BinaryOp::Accessor |
-		BinaryOp::Assign |
-		BinaryOp::Comma |
-		BinaryOp::DivMod |
-		BinaryOp::LRot |
-		BinaryOp::RRot => Node::new_binary(op, lhs, rhs, info),
+		// Collapse matching hs IDs
+		(Expr::Id(a), Expr::Id(b)) if a == b => {
+			let nx = Node::new_num(1, ValueType::Any, rhs.info.clone());
+			Node::new_binary(BinaryOp::LShift, lhs.clone(), nx, info)
+				.ok()
+		}
+
+		// Collapse constants
+		(Expr::Num(a), Expr::Num(b)) => Some(Node::new_num(a+b, kind, info)),
+
+		// Tree-rotate nested ADDs to be simplify friendly
+		(Expr::Num(_), Expr::Binary { op: BinaryOp::Add, lhs: r_lhs, rhs: r_rhs }) => {
+			match (&*r_lhs.expr, &*r_rhs.expr) {
+				(Expr::Id(_), Expr::Num(_)) => {
+					let new_rhs = Node::new_binary(BinaryOp::Add, lhs.clone(), r_rhs.clone(), info)
+						.ok()?;
+					Node::new_binary(BinaryOp::Add, r_lhs.clone(), new_rhs, r_lhs.info.start..r_rhs.info.end)
+						.ok()
+				}
+				_ => None,
+			}
+		}
+
+		// Tree-Rotate numbers to the right-branch
+		(Expr::Num(_), _) => Node::new_binary(BinaryOp::Add, rhs.clone(), lhs.clone(), info).ok(),
+
+		_ => None,
+	}
+}
+
+fn simplify_mul(lhs: &Node, rhs: &Node, kind: ValueType, info: TokenInfo) -> Option<Node> {
+	match (&*lhs.expr, &*rhs.expr) {
+		// Collapse 'unit' values
+		(Expr::Id(_), Expr::Num(1)) => Some(lhs.clone()),
+
+		// Collapse constants
+		(Expr::Num(a), Expr::Num(b)) => Some(Node::new_num(a*b, kind, info)),
+
+		// Tree-rotate nested MULs to be simplify friendly
+		(Expr::Num(_), Expr::Binary { op: BinaryOp::Mul, lhs: r_lhs, rhs: r_rhs }) => {
+			match (&*r_lhs.expr, &*r_rhs.expr) {
+				(Expr::Id(_), Expr::Num(_)) => {
+					let new_rhs = Node::new_binary(BinaryOp::Mul, lhs.clone(), r_rhs.clone(), info)
+						.ok()?;
+					Node::new_binary(BinaryOp::Mul, r_lhs.clone(), new_rhs, r_lhs.info.start..r_rhs.info.end)
+						.ok()
+				}
+				_ => None,
+			}
+		}
+
+		// Tree-Rotate constants to the right-branch
+		(Expr::Num(_), _) => Node::new_binary(BinaryOp::Mul, rhs.clone(), lhs.clone(), info).ok(),
+
+		_ => None,
 	}
 }
 
@@ -207,10 +187,12 @@ mod collapses {
 
 	fn binary(op: BinaryOp, a: Node, b: Node) -> Node {
 		Node::new_binary(op, a, b, 0..0)
+			.unwrap()
 	}
 
 	fn unary(op: UnaryOp, a: Node) -> Node {
 		Node::new_unary(op, a, 0..0)
+			.unwrap()
 	}
 
 	fn var(name: &str, vtype: ValueType, body: Node) -> Node {
@@ -224,10 +206,8 @@ mod collapses {
 			.expect("valid token list");
 		let ast = parser::eval(input, tokens)
 			.expect("valid AST");
-		let ast = reducer::eval(ast, 10);
-		assert_eq!(ast, vec![
-			var("a", ValueType::Unit, num(13))
-		]);
+		let ast = reducer::eval(ast);
+		assert_eq!(ast, var("a", ValueType::Unit, num(13)));
 	}
 
 	#[test]
@@ -237,10 +217,10 @@ mod collapses {
 			.expect("valid token list");
 		let ast = parser::eval(input, tokens)
 			.expect("valid AST");
-		let ast = reducer::eval(ast, 10);
-		assert_eq!(ast, vec![
+		let ast = reducer::eval(ast);
+		assert_eq!(ast,
 			var("a", ValueType::Unit, binary(BinaryOp::Add, id("b"), num(4)))
-		]);
+		);
 	}
 
 	#[test]
@@ -250,10 +230,10 @@ mod collapses {
 			.expect("valid token list");
 		let ast = parser::eval(input, tokens)
 			.expect("valid AST");
-		let ast = reducer::eval(ast, 10);
-		assert_eq!(ast, vec![
+		let ast = reducer::eval(ast);
+		assert_eq!(ast,
 			var("a", ValueType::Unit, binary(BinaryOp::Add, id("b"), num(2)))
-		]);
+		);
 	}
 
 	#[test]
@@ -263,10 +243,10 @@ mod collapses {
 			.expect("valid token list");
 		let ast = parser::eval(input, tokens)
 			.expect("valid AST");
-		let ast = reducer::eval(ast, 10);
-		assert_eq!(ast, vec![
+		let ast = reducer::eval(ast);
+		assert_eq!(ast,
 			var("a", ValueType::Unit, binary(BinaryOp::Add, unary(UnaryOp::Neg, id("b")), num(4)))
-		]);
+		);
 	}
 
 	#[test]
@@ -276,9 +256,9 @@ mod collapses {
 			.expect("valid token list");
 		let ast = parser::eval(input, tokens)
 			.expect("valid AST");
-		let ast = reducer::eval(ast, 10);
-		assert_eq!(ast, vec![
+		let ast = reducer::eval(ast);
+		assert_eq!(ast,
 			var("a", ValueType::to_u8(), num(2)),
-		]);
+		);
 	}
 }

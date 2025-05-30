@@ -6,7 +6,7 @@ mod checker;
 mod tokens;
 mod lexer;
 mod parser;
-mod reducer;
+// mod reducer;
 
 const TEST_INPUT: &'static str = "
 rec vec {

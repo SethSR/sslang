@@ -276,14 +276,6 @@ fn var_stmt_expr() -> miette::Result<()> {
 }
 
 #[test]
-fn var_stmt_expr_with_constant_folding() -> miette::Result<()> {
-	let mut t = Tester::default();
-	let n7 = t.num(7);
-	t.0 = t.var("a", VT::Any, n7);
-	parse_test("var a = 3 * 2 + 1", &t.finish())
-}
-
-#[test]
 fn var_stmt_vtype() -> miette::Result<()> {
 	let mut t = Tester::default();
 	let a = t.num(0);
@@ -465,12 +457,5 @@ fn assign_stmt() -> miette::Result<()> {
 	let n3 = t.num(3);
 	t.0 = t.binary(BinaryOp::Assign, a, n3)?;
 	parse_test("a = 3", &t.finish())
-}
-
-#[test]
-fn constant_folding() -> miette::Result<()> {
-	let mut t = Tester::default();
-	t.0 = t.num(6);
-	expr_test("3 * 2", &t)
 }
 

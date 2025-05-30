@@ -185,6 +185,10 @@ mod collapses {
 		Node::new(Expr::Num(n), ValueType::Any, 0..0)
 	}
 
+	fn block(ns: &[Node]) -> Node {
+		Node::new_block(ns.to_vec(), 0..0)
+	}
+
 	fn binary(op: BinaryOp, a: Node, b: Node) -> Node {
 		Node::new_binary(op, a, b, 0..0)
 			.unwrap()

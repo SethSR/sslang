@@ -341,8 +341,14 @@ impl Parser<'_,'_> {
 			TT::Var => self.stmt_var()?,
 			TT::While => self.stmt_while()?,
 
-			TT::True => Node::new_bool(true, left_token.range()),
-			TT::False => Node::new_bool(false, left_token.range()),
+			TT::True => {
+				self.index += 1;
+				self.nodes.new_bool(true, left_token.range())
+			}
+			TT::False => {
+				self.index += 1;
+				self.nodes.new_bool(false, left_token.range())
+			}
 
 			TT::Ident(ref s) => {
 				// HACK - srenshaw - We probably need a more robust way to distinguish between Record
@@ -386,7 +392,7 @@ impl Parser<'_,'_> {
 				self.index += 1;
 				let rhs = self.expr(r_bp)?;
 				self.nodes.new_unary((&left_token.tt).try_into()?, rhs, left_token.range())
-					.map_err(|err| err.with_source_code(self.source.to_string()))?;
+					.map_err(|err| err.with_source_code(self.source.to_string()))?
 			}
 
 			TT::EOF => return error!(eof, self,

@@ -5,7 +5,6 @@ use std::rc::Rc;
 
 use super::{BinaryOp, Meet, TokenInfo, TypedIdent, UnaryOp, ValueType};
 
-<<<<<<< HEAD
 pub(crate) type NodeId = usize;
 
 #[derive(Debug, Default)]
@@ -39,8 +38,8 @@ impl NodeStore {
 		self.add(Node::new(Expr::Block(b), ValueType::Unit, info))
 	}
 
-	pub(crate) fn new_bool(b: bool, info: TokenInfo) -> Node {
-		Node::new(Expr::Bool(b), ValueType::Bool, info)
+	pub(crate) fn new_bool(&mut self, b: bool, info: TokenInfo) -> NodeId {
+		self.add(Node::new(Expr::Bool(b), ValueType::Bool, info))
 	}
 
 	pub(crate) fn new_id(
@@ -358,8 +357,7 @@ pub(crate) struct Node {
 
 impl PartialEq for Node {
 	fn eq(&self, rhs: &Self) -> bool {
-		// TODO - srenshaw - At some point, we'll probably want to add 'kind' to this check.
-		self.expr == rhs.expr
+		self.kind == rhs.kind && self.expr == rhs.expr
 	}
 }
 
@@ -425,20 +423,44 @@ pub(crate) enum Expr {
 
 impl fmt::Display for Expr {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+		fn join<T>(a: &[T], b: fn(&T) -> String) -> String {
+			a.iter()
+				.map(|n| b(n))
+				.collect::<Vec<_>>()
+				.join(", ")
+		}
+
 		match self {
-			Expr::Num(n)                            => write!(fmt, "{n}"),
-			Expr::Id(s)                             => write!(fmt, "{s}"),
-			Expr::Bool(b)                           => write!(fmt, "{b}"),
-			Expr::Block(b)                          => write!(fmt, "{b:?}"),
-			Expr::While { cond, body }              => write!(fmt, "(while {cond} {body:?})"),
-			Expr::RecInit { name, field_inits }     => write!(fmt, "(init {name} {field_inits:?})"),
-			Expr::Unary { op, rhs }                 => write!(fmt, "({op} {rhs})"),
-			Expr::Binary { op, lhs, rhs }           => write!(fmt, "({op} {lhs} {rhs})"),
-			Expr::Var { name, body }                => write!(fmt, "(var {name} = {body})"),
-			Expr::If { cond, bt, bf }               => write!(fmt, "(if {cond} {bt:?} {bf:?})"),
-			Expr::FnCall { name, args }             => write!(fmt, "(call {name} {args:?})"),
-			Expr::Rec { name, fields }              => write!(fmt, "(rec {name} {fields:?})"),
-			Expr::Fun { name, params, rtype, body } => write!(fmt, "(fn {name} {params:?} -> {rtype} {body:?})"),
+			Expr::Num(n)                  => write!(fmt, "{n}"),
+			Expr::Id(s)                   => write!(fmt, "{s}"),
+			Expr::Bool(b)                 => write!(fmt, "{b}"),
+			Expr::Unary { op, rhs }       => write!(fmt, "({op} {rhs})"),
+			Expr::Var { name, body }      => write!(fmt, "(var {name} = {body})"),
+			Expr::Binary { op, lhs, rhs } => write!(fmt, "({op} {lhs} {rhs})"),
+
+			Expr::Block(body) => write!(fmt, "[{}]",
+				join(&body, |n| n.to_string()),
+			),
+			Expr::While { cond, body } => write!(fmt, "(while {cond} [{}])",
+				join(&body, |n| n.to_string()),
+			),
+			Expr::RecInit { name, field_inits } => write!(fmt, "(init {name} [{}])",
+				join(&field_inits, |(a,b)| format!("{a}: {b}")),
+			),
+			Expr::FnCall { name, args } => write!(fmt, "(call {name} [{}])",
+				join(&args, |n| n.to_string()),
+			),
+			Expr::Rec { name, fields } => write!(fmt, "(rec {name} [{}])",
+				join(&fields, |(a,b)| format!("{a}: {b}")),
+			),
+			Expr::If { cond, bt, bf } => write!(fmt, "(if {cond} [{}] [{}])",
+				join(&bt, |n| n.to_string()),
+				join(&bf, |n| n.to_string()),
+			),
+			Expr::Fun { name, params, rtype, body } => write!(fmt, "(fn {name} [{}] -> {rtype} [{}])",
+				join(&params, |(a,b)| format!("{a}: {b}")),
+				join(&body, |n| n.to_string()),
+			),
 		}
 	}
 }

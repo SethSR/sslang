@@ -6,6 +6,7 @@ use crate::parser::{
 	node::{NodeId, NodeStore},
 	TypedIdent,
 	UnaryOp,
+	Int,
 	ValueType as VT,
 };
 
@@ -20,8 +21,8 @@ impl Tester {
 		self
 	}
 
-	fn num(&mut self, n: i64) -> NodeId {
-		self.1.new_num(n, VT::Any, 0..0)
+	fn num(&mut self, n: i64, vt: VT) -> NodeId {
+		self.1.new_num(n, vt, 0..0)
 	}
 
 	fn ident(&mut self, s: &str) -> NodeId {
@@ -143,9 +144,9 @@ fn unary_op_ref() -> miette::Result<()> {
 #[test]
 fn precedence() -> miette::Result<()> {
 	let mut t = Tester::default();
-	let a = t.num(1);
-	let b = t.num(2);
-	let c = t.num(3);
+	let a = t.num(1, VT::Int(Int::Bot));
+	let b = t.num(2, VT::Int(Int::Bot));
+	let c = t.num(3, VT::Int(Int::Bot));
 	let m = t.binary(BinaryOp::Mul, b, c)?;
 	t.0 = t.binary(BinaryOp::Add, a, m)?;
 	expr_test("1 + 2 * 3", &t)?;
@@ -157,9 +158,9 @@ fn precedence() -> miette::Result<()> {
 #[test]
 fn parentheses() -> miette::Result<()> {
 	let mut t = Tester::default();
-	let a = t.num(1);
-	let b = t.num(2);
-	let c = t.num(3);
+	let a = t.num(1, VT::Int(Int::Bot));
+	let b = t.num(2, VT::Int(Int::Bot));
+	let c = t.num(3, VT::Int(Int::Bot));
 	let add = t.binary(BinaryOp::Add, b, c)?;
 	t.0 = t.binary(BinaryOp::Mul, a, add)?;
 	expr_test("1 * (2 + 3)", &t)
@@ -258,27 +259,27 @@ fn empty_input() -> miette::Result<()> {
 #[test]
 fn var_stmt() -> miette::Result<()> {
 	let mut t = Tester::default();
-	let nx = t.num(0);
-	t.0 = t.var("a", VT::Any, nx);
+	let nx = t.num(0, VT::Int(Int::Bot));
+	t.0 = t.var("a", VT::Unit, nx);
 	parse_test("var a = 0", &t.finish())
 }
 
 #[test]
 fn var_stmt_expr() -> miette::Result<()> {
 	let mut t = Tester::default();
-	let a = t.num(3);
-	let b = t.num(2);
-	let c = t.num(1);
+	let a = t.num(3, VT::Int(Int::Bot));
+	let b = t.num(2, VT::Int(Int::Bot));
+	let c = t.num(1, VT::Int(Int::Bot));
 	let mul = t.binary(BinaryOp::Mul, a, b)?;
 	let add = t.binary(BinaryOp::Add, mul, c)?;
-	t.0 = t.var("a", VT::Any, add);
+	t.0 = t.var("a", VT::Unit, add);
 	parse_test("var a = 3 * 2 + 1", &t.finish())
 }
 
 #[test]
 fn var_stmt_vtype() -> miette::Result<()> {
 	let mut t = Tester::default();
-	let a = t.num(0);
+	let a = t.num(0, VT::Int(Int::Bot));
 	t.0 = t.var("a", VT::to_u8(), a);
 	parse_test("var a: u8 = 0", &t.finish())
 }
@@ -366,9 +367,9 @@ fn fn_stmt_rtype_udt() -> miette::Result<()> {
 #[test]
 fn fn_stmt_body() -> miette::Result<()> {
 	let mut t = Tester::default();
-	let n1 = t.num(1);
+	let n1 = t.num(1, VT::Int(Int::Bot));
 	let vb = t.var("b", VT::Unit, n1);
-	let n2 = t.num(2);
+	let n2 = t.num(2, VT::Int(Int::Bot));
 	let vc = t.var("c", VT::Unit, n2);
 	let b = t.ident("b");
 	let c = t.ident("c");
@@ -454,7 +455,7 @@ fn while_stmt() -> miette::Result<()> {
 fn assign_stmt() -> miette::Result<()> {
 	let mut t = Tester::default();
 	let a = t.ident("a");
-	let n3 = t.num(3);
+	let n3 = t.num(3, VT::Int(Int::Bot));
 	t.0 = t.binary(BinaryOp::Assign, a, n3)?;
 	parse_test("a = 3", &t.finish())
 }

@@ -111,7 +111,7 @@ fn main() -> miette::Result<()> {
 	}
 
 	info!("type-checking");
-	let ast = checker::eval(ast);
+	let ast = checker::eval(start, ast);
 	if options.debug.contains(&Stage::Checker) {
 		debug!("checked AST: {ast:?}");
 	}

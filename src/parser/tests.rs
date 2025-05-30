@@ -64,7 +64,8 @@ impl Tester {
 		rtype: VT,
 		body: &[NodeId],
 	) -> NodeId {
-		self.1.new_fun(name.into(), params.to_vec(), rtype, body.to_vec(), 0..0)
+		let body = self.block(body);
+		self.1.new_fun(name.into(), params.to_vec(), rtype, body, 0..0)
 	}
 
 	fn rec(
@@ -81,7 +82,9 @@ impl Tester {
 		bt: &[NodeId],
 		bf: &[NodeId],
 	) -> NodeId {
-		self.1.new_if(cond, bt.to_vec(), bf.to_vec(), 0..0)
+		let bt = self.block(bt);
+		let bf = self.block(bf);
+		self.1.new_if(cond, bt, bf, 0..0)
 	}
 
 	fn while_s(
@@ -89,7 +92,8 @@ impl Tester {
 		cond: NodeId,
 		body: &[NodeId],
 	) -> NodeId {
-		self.1.new_while(cond, body.to_vec(), 0..0)
+		let body = self.block(body);
+		self.1.new_while(cond, body, 0..0)
 	}
 }
 
@@ -200,10 +204,7 @@ fn assert_nodes(nxa: NodeId, sa: &NodeStore, nxb: NodeId, sb: &NodeStore) {
 				assert_eq!(na, nb);
 				assert_eq!(pa, pb);
 				assert_eq!(ra, rb);
-				assert_eq!(ba.len(), bb.len());
-				for (a,b) in ba.iter().zip(bb.iter()) {
-					assert_nodes(*a, sa, *b, sb);
-				}
+				assert_nodes(*ba, sa, *bb, sb);
 			}
 			(Expr::Var { name: na, body: ba }, Expr::Var { name: nb, body: bb }) => {
 				assert_eq!(na, nb);
@@ -211,21 +212,12 @@ fn assert_nodes(nxa: NodeId, sa: &NodeStore, nxb: NodeId, sb: &NodeStore) {
 			}
 			(Expr::If { cond: ca, bt: ta, bf: fa }, Expr::If { cond: cb, bt: tb, bf: fb }) => {
 				assert_nodes(*ca, sa, *cb, sb);
-				assert_eq!(ta.len(), tb.len());
-				for (a,b) in ta.iter().zip(tb.iter()) {
-					assert_nodes(*a, sa, *b, sb);
-				}
-				assert_eq!(fa.len(), fb.len());
-				for (a,b) in fa.iter().zip(fb.iter()) {
-					assert_nodes(*a, sa, *b, sb);
-				}
+				assert_nodes(*ta, sa, *tb, sb);
+				assert_nodes(*fa, sa, *fb, sb);
 			}
 			(Expr::While { cond: ca, body: ba }, Expr::While { cond: cb, body: bb }) => {
 				assert_nodes(*ca, sa, *cb, sb);
-				assert_eq!(ba.len(), bb.len());
-				for (a,b) in ba.iter().zip(bb.iter()) {
-					assert_nodes(*a, sa, *b, sb);
-				}
+				assert_nodes(*ba, sa, *bb, sb);
 			}
 			(Expr::Unary { op: oa, rhs: ra }, Expr::Unary { op: ob, rhs: rb }) => {
 				assert_eq!(oa, ob);

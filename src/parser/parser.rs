@@ -467,9 +467,7 @@ impl Parser<'_,'_> {
 		self.dbg_depth += 2;
 		let id = self.ident()?;
 		self.match_token(TokenType::Colon)?;
-		let body_start = self.peek(0).range().start;
 		let body = self.block()
-			.map(|b| self.nodes.new_block(b, body_start..self.peek(-1).range().end))
 			.or_else(|_| self.expr(0))?;
 		self.dbg_depth -= 2;
 		Ok((id, body))
@@ -522,9 +520,10 @@ impl Parser<'_,'_> {
 	}
 
 	/// block := '{' expr* '}'
-	pub(super) fn block(&mut self) -> miette::Result<Vec<NodeId>> {
+	pub(super) fn block(&mut self) -> miette::Result<NodeId> {
 		log("Block", self.dbg_depth);
 		self.dbg_depth += 2;
+		let start = self.peek(0).range().start;
 		match self.match_token(TokenType::OBrace) {
 			Ok(_) => {},
 			Err(e) => {
@@ -537,7 +536,10 @@ impl Parser<'_,'_> {
 			body.push(expr);
 		}
 		let result = self.match_token(TokenType::CBrace)
-			.map(|_| body);
+			.map(|_| {
+				let end = self.peek(-1).range().end;
+				self.nodes.new_block(body, start..end)
+			});
 		self.dbg_depth -= 2;
 		result
 	}
@@ -587,9 +589,7 @@ impl Parser<'_,'_> {
 			.and_then(|_| self.value_type())
 			.unwrap_or(ValueType::Unit);
 		self.match_token(TokenType::Eq1)?;
-		let body_start = self.peek(0).range().start;
 		let body = self.block()
-			.map(|b| self.nodes.new_block(b, body_start..self.peek(-1).range().end))
 			.or_else(|_| self.expr(0))?;
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;

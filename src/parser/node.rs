@@ -34,13 +34,13 @@ impl NodeStore {
 }
 
 impl NodeStore {
-	pub(crate) fn new_block(&mut self, b: Vec<NodeId>, info: TokenInfo) -> NodeId {
-		let kind = b.last()
+	pub(crate) fn new_block(&mut self, body: Vec<NodeId>, info: TokenInfo) -> NodeId {
+		let kind = body.last()
 			.and_then(|nx| self.data.get(*nx))
 			.and_then(|n| n.as_ref())
 			.map(|n| n.kind.clone())
 			.unwrap_or(ValueType::Unit);
-		self.add(Node::new(Expr::Block(b), kind, info))
+		self.add(Node::new(Expr::Block { body }, kind, info))
 	}
 
 	pub(crate) fn new_bool(&mut self, b: bool, info: TokenInfo) -> NodeId {
@@ -101,13 +101,13 @@ impl NodeStore {
 		&mut self,
 		cond: NodeId,
 		bt: NodeId,
-		bf: NodeId,
+		bf: Option<NodeId>,
 		info: TokenInfo,
 	) -> NodeId {
 		let bt_kind = self.data.get(bt)
 			.and_then(|n| n.as_ref())
 			.map(|n| &n.kind);
-		let bf_kind = self.data.get(bf)
+		let bf_kind = bf.and_then(|b| self.data.get(b))
 			.and_then(|n| n.as_ref())
 			.map(|n| &n.kind);
 		let kind = match (bt_kind, bf_kind) {
@@ -383,7 +383,9 @@ pub(crate) enum Expr {
 	Num(i64),
 	Id(Rc<str>),
 	Bool(bool),
-	Block(Vec<NodeId>),
+	Block {
+		body: Vec<NodeId>,
+	},
 	Rec {
 		name: Rc<str>,
 		fields: Vec<TypedIdent>,
@@ -401,7 +403,7 @@ pub(crate) enum Expr {
 	If {
 		cond: NodeId,
 		bt: NodeId,
-		bf: NodeId,
+		bf: Option<NodeId>,
 	},
 	While {
 		cond: NodeId,
@@ -443,7 +445,7 @@ impl fmt::Display for Expr {
 			Expr::Var { name, body }      => write!(fmt, "(var {name} = {body})"),
 			Expr::Binary { op, lhs, rhs } => write!(fmt, "({op} {lhs} {rhs})"),
 
-			Expr::Block(body) => write!(fmt, "[{}]",
+			Expr::Block { body } => write!(fmt, "[{}]",
 				join(&body, |n| n.to_string()),
 			),
 			Expr::While { cond, body } => write!(fmt, "(while {cond} {body})"),
@@ -456,7 +458,8 @@ impl fmt::Display for Expr {
 			Expr::Rec { name, fields } => write!(fmt, "(rec {name} [{}])",
 				join(&fields, |(a,b)| format!("{a}: {b}")),
 			),
-			Expr::If { cond, bt, bf } => write!(fmt, "(if {cond} {bt} {bf})"),
+			Expr::If { cond, bt, bf: Some(bf) } => write!(fmt, "(if {cond} {bt} {bf})"),
+			Expr::If { cond, bt, bf: None } => write!(fmt, "(if {cond} {bt} ())"),
 			Expr::Fun { name, params, rtype, body } => write!(fmt, "(fn {name} [{}] -> {rtype} {body})",
 				join(&params, |(a,b)| format!("{a}: {b}")),
 			),

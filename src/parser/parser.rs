@@ -321,7 +321,7 @@ impl Parser<'_,'_> {
 		let cond = self.expr(0)?;
 		let bt = self.block()?;
 		let bf = self.match_token(TokenType::Else)
-			.and_then(|_| self.block())
+			.map(|_| self.block().ok())
 			.unwrap_or_default();
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;

@@ -83,7 +83,11 @@ impl Tester {
 		bf: &[NodeId],
 	) -> NodeId {
 		let bt = self.block(bt);
-		let bf = self.block(bf);
+		let bf = if bf.is_empty() {
+			None
+		} else {
+			Some(self.block(bf))
+		};
 		self.1.new_if(cond, bt, bf, 0..0)
 	}
 
@@ -190,7 +194,7 @@ fn assert_nodes(nxa: NodeId, sa: &NodeStore, nxb: NodeId, sb: &NodeStore) {
 		(Ok(Node { expr: a, ..}), Ok(Node { expr: b, ..})) => match (a, b) {
 			(Expr::Id(ia), Expr::Id(ib)) => assert_eq!(ia, ib),
 			(Expr::Num(na), Expr::Num(nb)) => assert_eq!(na, nb),
-			(Expr::Block(ba), Expr::Block(bb)) => {
+			(Expr::Block { body: ba }, Expr::Block { body: bb }) => {
 				assert_eq!(ba.len(), bb.len());
 				for (a,b) in ba.iter().zip(bb.iter()) {
 					assert_nodes(*a, sa, *b, sb);
@@ -213,7 +217,11 @@ fn assert_nodes(nxa: NodeId, sa: &NodeStore, nxb: NodeId, sb: &NodeStore) {
 			(Expr::If { cond: ca, bt: ta, bf: fa }, Expr::If { cond: cb, bt: tb, bf: fb }) => {
 				assert_nodes(*ca, sa, *cb, sb);
 				assert_nodes(*ta, sa, *tb, sb);
-				assert_nodes(*fa, sa, *fb, sb);
+				match (fa, fb) {
+					(Some(fa), Some(fb)) => assert_nodes(*fa, sa, *fb, sb),
+					(None, None) => {}
+					_ => panic!("{fa:?} != {fb:?}"),
+				}
 			}
 			(Expr::While { cond: ca, body: ba }, Expr::While { cond: cb, body: bb }) => {
 				assert_nodes(*ca, sa, *cb, sb);

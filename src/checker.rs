@@ -1,13 +1,14 @@
 
-use std::collections::HashMap;
-
 use crate::parser::{
 	// Expr,
-	Node,
 	NodeId,
+	NodeStore,
 };
 
-pub(crate) fn eval(start: NodeId, nodes: HashMap<NodeId, Node>) -> Node {
+pub(crate) fn eval(
+	start: NodeId,
+	nodes: NodeStore,
+) -> (NodeId, NodeStore) {
 	/*
 	match &*node.expr {
 		Expr::Num(n) => println!("{n}"),
@@ -31,8 +32,7 @@ pub(crate) fn eval(start: NodeId, nodes: HashMap<NodeId, Node>) -> Node {
 		Expr::Fun { name, params, rtype, body } => println!("(fn {name} {params:?} -> {rtype} {body:?})"),
 	};
 	*/
-	let node = nodes[&start].clone();
-	println!("{node}");
-	node
+	println!("{nodes:?}");
+	(start, nodes)
 }
 

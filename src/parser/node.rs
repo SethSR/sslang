@@ -1,5 +1,4 @@
 
-use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
@@ -14,13 +13,6 @@ pub(crate) struct NodeStore {
 }
 
 impl NodeStore {
-	pub(super) fn output(self) -> HashMap<NodeId, Node> {
-		self.data.into_iter()
-			.enumerate()
-			.flat_map(|(nx,node)| node.map(|n| (nx,n)))
-			.collect()
-	}
-
 	pub(super) fn simplify(&mut self, nx: NodeId) -> NodeId {
 		match self.get(nx) {
 			Ok(Node { expr, kind, info }) => match expr {

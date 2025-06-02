@@ -2,8 +2,7 @@
 use crate::lexer;
 use crate::parser::{
 	BinaryOp,
-	Node,
-	node::{NodeId, NodeStore},
+	node::{Node, NodeId, NodeStore},
 	TypedIdent,
 	UnaryOp,
 	Int,

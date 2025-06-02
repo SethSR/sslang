@@ -14,7 +14,7 @@ mod tests;
 
 pub(crate) use types::{Meet, ValueType};
 pub(crate) use operators::{BinaryOp, UnaryOp};
-pub(crate) use node::{Expr, NodeId, NodeStore};
+pub(crate) use node::{Expr, Node, NodeId, NodeStore};
 
 pub(crate) type TokenInfo = Range<usize>;
 pub(crate) type TypedIdent = (Rc<str>, ValueType);

@@ -6,7 +6,7 @@ mod checker;
 mod tokens;
 mod lexer;
 mod parser;
-// mod reducer;
+mod reducer;
 
 const TEST_INPUT: &'static str = "
 rec vec {
@@ -66,6 +66,9 @@ struct Options {
 	#[arg(short,long,default_value_t=tracing::Level::INFO)]
 	level: tracing::Level,
 
+	#[arg(short,long,default_value_t=false)]
+	release: bool,
+
 	#[arg(short,long,default_value_t=String::from("a.out"))]
 	output_file: String,
 
@@ -111,16 +114,18 @@ fn main() -> miette::Result<()> {
 	}
 
 	info!("type-checking");
-	let ast = checker::eval(start, ast);
+	let (start, mut ast) = checker::eval(start, ast);
 	if options.debug.contains(&Stage::Checker) {
 		debug!("checked AST: {ast:?}");
 	}
 
-	// info!("reduction");
-	// let ast = reducer::eval(ast);
-	// if options.debug.contains(&Stage::Reducer) {
-		// debug!("reduced AST: {ast:?}");
-	// }
+	if options.release {
+		info!("reduction");
+		let ast = reducer::eval(&mut ast, start);
+		if options.debug.contains(&Stage::Reducer) {
+			debug!("reduced AST: {ast:?}");
+		}
+	}
 
 	let output = format!("Start ID: {start}\nAST: {ast:?}");
 

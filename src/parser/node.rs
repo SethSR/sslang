@@ -147,6 +147,19 @@ impl NodeStore {
 		self.add(Node::new(Expr::FnCall { name, args }, ValueType::Any, info))
 	}
 
+	pub(crate) fn new_phi(
+		&mut self,
+		lhs: NodeId,
+		rhs: NodeId,
+	) -> miette::Result<NodeId> {
+		let lnode = &self.get(lhs)?;
+		let rnode = &self.get(rhs)?;
+		let kind = lnode.kind.meet(&rnode.kind);
+		let start = lnode.info.start.min(rnode.info.start);
+		let end = lnode.info.end.max(rnode.info.end);
+		Ok(self.add(Node::new(Expr::Phi { lhs, rhs }, kind, start..end)))
+	}
+
 	pub(crate) fn get(&self, nx: NodeId) -> miette::Result<&Node> {
 		self.data.get(nx)
 			.and_then(|n| n.as_ref())
@@ -239,6 +252,10 @@ pub(crate) enum Expr {
 		name: Rc<str>,
 		args: Vec<NodeId>,
 	},
+	Phi {
+		lhs: NodeId,
+		rhs: NodeId,
+	},
 }
 
 impl fmt::Display for Expr {
@@ -257,6 +274,7 @@ impl fmt::Display for Expr {
 			Expr::Unary { op, rhs }       => write!(fmt, "({op} {rhs})"),
 			Expr::Var { name, body }      => write!(fmt, "(var {name} = {body})"),
 			Expr::Binary { op, lhs, rhs } => write!(fmt, "({op} {lhs} {rhs})"),
+			Expr::Phi { lhs, rhs }        => write!(fmt, "(phi {lhs} {rhs})"),
 
 			Expr::Block { body } => write!(fmt, "[{}]",
 				join(&body, |n| n.to_string()),

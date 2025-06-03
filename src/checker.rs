@@ -32,7 +32,7 @@ pub(crate) fn eval(
 		Expr::Fun { name, params, rtype, body } => println!("(fn {name} {params:?} -> {rtype} {body:?})"),
 	};
 	*/
-	println!("{nodes:?}");
+	println!("{nodes:#?}");
 	(start, nodes)
 }
 

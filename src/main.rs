@@ -26,6 +26,12 @@ fn main() {
 	var p = vec {x:x, y:y}
 	var q = vec {x:1.5, y:2.6}
 
+	if x < y {
+		x = y
+	} else {
+		y = x
+	}
+
 	fn vmul(a:vec, b:vec) -> quat {
 		quat {
 			s: a.x * b.x + a.y * b.y,

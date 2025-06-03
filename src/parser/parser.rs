@@ -1,4 +1,5 @@
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use miette::{LabeledSpan, IntoDiagnostic, WrapErr};
@@ -49,11 +50,16 @@ macro_rules! error {
 	}
 }
 
+type Scope = HashMap<Rc<str>, NodeId>;
+
 #[derive(Debug)]
 pub(super) struct Parser<'a,'b> {
 	input: &'a [Token],
 	source: &'b str,
 	index: usize,
+
+	scope_index: usize,
+	scopes: Vec<Scope>,
 
 	pub(super) nodes: NodeStore,
 
@@ -67,6 +73,9 @@ impl<'a,'b> Parser<'a,'b> {
 			source,
 			input: &input,
 			index: 0,
+
+			scope_index: 0,
+			scopes: Vec::default(),
 
 			nodes: NodeStore::default(),
 
@@ -83,10 +92,14 @@ impl<'a,'b> Parser<'a,'b> {
 		&mut self,
 	) -> miette::Result<NodeId> {
 		let mut program = Vec::default();
+		self.scope_push();
 		while self.peek(0).tt != TokenType::EOF {
 			program.push(self.expr(0)?);
 		}
-		Ok(self.nodes.new_block(program, 0..self.source.len()))
+		self.scope_pop();
+		let nx = self.nodes.new_block(program, 0..self.source.len());
+		println!("{:#?}", self.scopes);
+		Ok(nx)
 	}
 }
 
@@ -319,10 +332,26 @@ impl Parser<'_,'_> {
 		let start = self.peek(0).range().start;
 		self.match_token(TokenType::If)?;
 		let cond = self.expr(0)?;
+
+		let f_scopes = self.scopes.clone();
+
+		self.scope_push();
 		let bt = self.block()?;
-		let bf = self.match_token(TokenType::Else)
-			.map(|_| self.block().ok())
-			.unwrap_or_default();
+		self.scope_pop();
+		let t_scopes = self.scopes.clone();
+
+		self.scopes = f_scopes;
+		let bf = if self.match_token(TokenType::Else).is_ok() {
+			self.scope_push();
+			let bf = self.block().ok();
+			self.scope_pop();
+			bf
+		} else {
+			None
+		};
+
+		self.scopes = self.scope_merge(t_scopes, self.scopes.clone())?;
+
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
 		Ok(self.nodes.new_if(cond, bt, bf, start..end))
@@ -467,8 +496,14 @@ impl Parser<'_,'_> {
 		self.dbg_depth += 2;
 		let id = self.ident()?;
 		self.match_token(TokenType::Colon)?;
-		let body = self.block()
-			.or_else(|_| self.expr(0))?;
+		let body = if self.peek(1).tt == TokenType::OBrace {
+			self.scope_push();
+			let body = self.block()?;
+			self.scope_pop();
+			body
+		} else {
+			self.expr(0)?
+		};
 		self.dbg_depth -= 2;
 		Ok((id, body))
 	}
@@ -556,7 +591,9 @@ impl Parser<'_,'_> {
 		self.match_token(TokenType::CBrace)?;
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
-		Ok(self.nodes.new_rec(name, fields, start..end))
+		let nx = self.nodes.new_rec(Rc::clone(&name), fields, start..end);
+		self.scope_add(name, nx);
+		Ok(nx)
 	}
 
 	/// fn := 'fn' ident '(' params ')' ('->' value_type)? block
@@ -572,10 +609,14 @@ impl Parser<'_,'_> {
 		let rtype = self.match_token(TokenType::RetArrow)
 			.and_then(|_| self.value_type())
 			.unwrap_or(ValueType::Unit);
+		self.scope_push();
 		let body = self.block()?;
+		self.scope_pop();
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
-		Ok(self.nodes.new_fun(name, params, rtype, body, start..end))
+		let nx = self.nodes.new_fun(Rc::clone(&name), params, rtype, body, start..end);
+		self.scope_add(name, nx);
+		Ok(nx)
 	}
 
 	/// var := 'var' ident (':' value_type)? '=' (block | expr)
@@ -589,11 +630,19 @@ impl Parser<'_,'_> {
 			.and_then(|_| self.value_type())
 			.unwrap_or(ValueType::Unit);
 		self.match_token(TokenType::Eq1)?;
-		let body = self.block()
-			.or_else(|_| self.expr(0))?;
+		let body = if self.peek(0).tt == TokenType::OBrace {
+			self.scope_push();
+			let body = self.block()?;
+			self.scope_pop();
+			body
+		} else {
+			self.expr(0)?
+		};
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
-		Ok(self.nodes.new_var(name, vtype, body, start..end))
+		let nx = self.nodes.new_var(Rc::clone(&name), vtype, body, start..end);
+		self.scope_add(name, nx);
+		Ok(nx)
 	}
 
 	/// while := 'while' expr block
@@ -603,10 +652,97 @@ impl Parser<'_,'_> {
 		let start = self.peek(0).range().start;
 		self.match_token(TokenType::While)?;
 		let cond = self.expr(0)?;
+		self.scope_push();
 		let body = self.block()?;
+		self.scope_pop();
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
 		Ok(self.nodes.new_while(cond, body, start..end))
+	}
+}
+
+impl Parser<'_,'_> {
+	fn scope_add(&mut self, name: Rc<str>, nx: NodeId) {
+		println!("add {name} : {nx} to scope");
+		self.scopes[self.scope_index-1].insert(name, nx);
+	}
+
+	fn scope_push(&mut self) {
+		println!("pushed a scope");
+		self.scope_index += 1;
+		if self.scope_index >= self.scopes.len() {
+			self.scopes.push(HashMap::default());
+		}
+	}
+
+	fn scope_pop(&mut self) {
+		println!("popped a scope");
+		self.scope_index -= 1;
+	}
+
+	fn scope_merge(
+		&mut self,
+		mut t_scopes: Vec<Scope>,
+		mut f_scopes: Vec<Scope>,
+	) -> miette::Result<Vec<Scope>> {
+		println!("merging scopes");
+
+		let mut scopes = vec![];
+
+		let mut index = 0;
+		while index < t_scopes.len() || index < f_scopes.len() {
+			let mut scope = HashMap::default();
+
+			match (t_scopes.get_mut(index), f_scopes.get_mut(index)) {
+				(Some(t_scope), Some(f_scope)) => {
+					for (name, tnx) in t_scope.iter() {
+						if let Some(fnx) = f_scope.remove(name) {
+							let tnode = self.nodes.get(*tnx);
+							let fnode = self.nodes.get(fnx);
+							match (tnode, fnode) {
+								(Ok(a), Ok(b)) if a == b => {}
+								_ => {
+									let nx = self.nodes.new_phi(*tnx, fnx)?;
+									scope.insert(Rc::clone(name), nx);
+								}
+							}
+						} else {
+							scope.insert(Rc::clone(name), *tnx);
+						}
+					}
+
+					for (name, fnx) in f_scope {
+						if let Some(tnx) = t_scope.remove(name) {
+							let fnode = self.nodes.get(*fnx);
+							let tnode = self.nodes.get(tnx);
+							match (fnode, tnode) {
+								(Ok(a), Ok(b)) if a == b => {}
+								_ => {
+									let nx = self.nodes.new_phi(tnx, *fnx)?;
+									scope.insert(Rc::clone(name), nx);
+								}
+							}
+						} else {
+							scope.insert(Rc::clone(name), *fnx);
+						}
+					}
+				}
+
+				(Some(o_scope), None) |
+				(None, Some(o_scope)) => {
+					for (name, nx) in o_scope {
+						scope.insert(Rc::clone(name), *nx);
+					}
+				}
+
+				(None, None) => break,
+			}
+
+			scopes.push(scope);
+			index += 1;
+		}
+
+		Ok(scopes)
 	}
 }
 

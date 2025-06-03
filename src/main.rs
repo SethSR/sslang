@@ -113,27 +113,26 @@ fn main() -> miette::Result<()> {
 	}
 
 	info!("parsing");
-	let (start, ast) = parser::eval(&source, tokens)?;
+	let out = parser::eval(&source, tokens)?;
 	if options.debug.contains(&Stage::Parser) {
-		debug!("Start ID: {start}");
-		debug!("AST: {ast:?}");
+		debug!("Parser Output: {out:?}");
 	}
 
 	info!("type-checking");
-	let (start, mut ast) = checker::eval(start, ast);
+	let mut out = checker::eval(out);
 	if options.debug.contains(&Stage::Checker) {
-		debug!("checked AST: {ast:?}");
+		debug!("checked AST: {out:?}");
 	}
 
 	if options.release {
 		info!("reduction");
-		let ast = reducer::eval(&mut ast, start);
+		let ast = reducer::eval(&mut out.store, out.start);
 		if options.debug.contains(&Stage::Reducer) {
 			debug!("reduced AST: {ast:?}");
 		}
 	}
 
-	let output = format!("Start ID: {start}\nAST: {ast:?}");
+	let output = format!("AST: {out:?}");
 
 	std::fs::write("test.out", output)
 //	std::fs::write(&out_file_name, output)

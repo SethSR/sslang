@@ -50,6 +50,8 @@ macro_rules! error {
 	}
 }
 
+pub(crate) type RecStore = HashMap<Rc<str>, HashMap<Rc<str>, ValueType>>;
+pub(crate) type FuncStore = HashMap<Rc<str>, (Vec<(Rc<str>, ValueType)>, ValueType)>;
 type Scope = HashMap<Rc<str>, NodeId>;
 
 #[derive(Debug)]
@@ -61,7 +63,10 @@ pub(super) struct Parser<'a,'b> {
 	scope_index: usize,
 	scopes: Vec<Scope>,
 
+	// TODO - srenshaw - All of these fields will probably be moved into a Scope structure.
 	pub(super) nodes: NodeStore,
+	pub(super) records: RecStore,
+	pub(super) functions: FuncStore,
 
 	// DEBUG
 	dbg_depth: usize,
@@ -78,6 +83,8 @@ impl<'a,'b> Parser<'a,'b> {
 			scopes: Vec::default(),
 
 			nodes: NodeStore::default(),
+			records: RecStore::default(),
+			functions: FuncStore::default(),
 
 			dbg_depth: 2,
 		}
@@ -94,7 +101,16 @@ impl<'a,'b> Parser<'a,'b> {
 		let mut program = Vec::default();
 		self.scope_push();
 		while self.peek(0).tt != TokenType::EOF {
-			program.push(self.expr(0)?);
+			let nx = self.expr(0)?;
+			let node = self.nodes.get(nx).unwrap();
+			match &node.expr {
+				Expr::Var { name, ..} |
+				Expr::Fun { name, ..} => {
+					self.scope_add(Rc::clone(name), nx);
+				}
+				_ => {}
+			}
+			program.push(nx);
 		}
 		self.scope_pop();
 		let nx = self.nodes.new_block(program, 0..self.source.len());
@@ -591,6 +607,17 @@ impl Parser<'_,'_> {
 		self.match_token(TokenType::CBrace)?;
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
+
+		if self.records.contains_key(&name) {
+			return Err(miette::miette! {
+				labels = vec![
+					LabeledSpan::at(start..end, "here"),
+				],
+				"A Record with this name is already defined."
+			});
+		}
+		self.records.insert(Rc::clone(&name), fields.iter().cloned().collect());
+
 		let nx = self.nodes.new_rec(Rc::clone(&name), fields, start..end);
 		self.scope_add(name, nx);
 		Ok(nx)
@@ -614,6 +641,17 @@ impl Parser<'_,'_> {
 		self.scope_pop();
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
+
+		if self.functions.contains_key(&name) {
+			return Err(miette::miette! {
+				labels = vec![
+					LabeledSpan::at(start..end, "here"),
+				],
+				"A Function with this name is already defined."
+			});
+		}
+		self.functions.insert(Rc::clone(&name), (params.iter().cloned().collect(), rtype.clone()));
+
 		let nx = self.nodes.new_fun(Rc::clone(&name), params, rtype, body, start..end);
 		self.scope_add(name, nx);
 		Ok(nx)

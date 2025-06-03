@@ -1,10 +1,13 @@
 
+use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
 use super::{BinaryOp, Meet, TokenInfo, TypedIdent, UnaryOp, ValueType};
 
 pub(crate) type NodeId = usize;
+
+pub(crate) type Scope = HashMap<Rc<str>, NodeId>;
 
 #[derive(Debug, Default)]
 pub(crate) struct NodeStore {
@@ -165,10 +168,16 @@ impl NodeStore {
 			.and_then(|n| n.as_ref())
 			.ok_or_else(|| miette::miette!("Compiler Error: expression information not found in parser"))
 	}
+
+	pub(crate) fn get_mut(&mut self, nx: NodeId) -> miette::Result<&mut Node> {
+		self.data.get_mut(nx)
+			.and_then(|n| n.as_mut())
+			.ok_or_else(|| miette::miette!("Compiler Error: expression information not found in parser"))
+	}
 }
 
 impl NodeStore {
-	fn add(&mut self, node: Node) -> NodeId {
+	pub(crate) fn add(&mut self, node: Node) -> NodeId {
 		if let Some(idx) = self.free.pop() {
 			self.data[idx] = Some(node);
 			idx

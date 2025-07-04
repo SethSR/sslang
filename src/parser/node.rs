@@ -13,6 +13,15 @@ pub(crate) struct NodeStore {
 }
 
 impl NodeStore {
+	pub fn iter(&self) -> impl Iterator<Item=(usize,&Node)> {
+		self.data.iter()
+			.enumerate()
+			.filter_map(|(i,n)| n.as_ref().zip(Some(i)))
+			.map(|(n,i)| (i,n))
+	}
+}
+
+impl NodeStore {
 	pub(crate) fn new_block(&mut self, body: Vec<NodeId>, info: TokenInfo) -> NodeId {
 		let kind = body.last()
 			.and_then(|nx| self.data.get(*nx))

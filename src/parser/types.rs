@@ -158,7 +158,7 @@ impl Meet for Fix {
 	}
 }
 
-// TODO - srenshaw - Add UDT cache to parser::Parser.
+// TODO - srenshaw - Add Udt cache to parser::Parser.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ValueType {
@@ -173,7 +173,7 @@ pub(crate) enum ValueType {
 	Fix(Fix),
 	/// All User Defined Types
 	///
-	/// UDTs are stored in a type-cache in parser::Parser.
+	/// User-Defined Types are stored in a type-cache in parser::Parser.
 	Udt(Rc<str>),
 	/// Bottom type
 	Unit,

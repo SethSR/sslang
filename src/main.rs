@@ -115,7 +115,10 @@ fn main() -> miette::Result<()> {
 	info!("parsing");
 	let out = parser::eval(source, tokens)?;
 	if options.debug.contains(&Stage::Parser) {
-		debug!("Parser Output: {out:?}");
+		debug!("Start ID: {}", out.start);
+		for (nx, node) in out.store.iter() {
+			debug!("[{nx:>3}]: {node:?}");
+		}
 	}
 
 	info!("type-checking");

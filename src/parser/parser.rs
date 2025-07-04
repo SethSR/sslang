@@ -435,7 +435,9 @@ impl Parser<'_,'_> {
 					if let Some(nx) = self.scope_find(s) {
 						nx
 					} else {
-						self.nodes.new_id(Rc::clone(s), ValueType::Any, left_token.range())
+						let nx = self.nodes.new_id(Rc::clone(s), ValueType::Any, left_token.range());
+						self.scope_add(Rc::clone(s), nx);
+						nx
 					}
 				}
 			}

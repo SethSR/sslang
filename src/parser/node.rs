@@ -28,7 +28,7 @@ impl NodeStore {
 			.and_then(|n| n.as_ref())
 			.map(|n| n.kind.clone())
 			.unwrap_or(ValueType::Unit);
-		self.add(Node::new(Expr::Block { body }, kind, info))
+		self.add(Node::new(Expr::Block(body), kind, info))
 	}
 
 	pub(crate) fn new_bool(&mut self, b: bool, info: TokenInfo) -> NodeId {
@@ -41,7 +41,7 @@ impl NodeStore {
 		kind: ValueType,
 		info: TokenInfo,
 	) -> NodeId {
-		self.add(Node::new(Expr::Id(s), kind, info))
+		self.add(Node::new(Expr::Id(s.clone()), kind, info))
 	}
 
 	pub(crate) fn new_num(
@@ -68,7 +68,7 @@ impl NodeStore {
 		name: Rc<str>,
 		params: Vec<NodeId>,
 		rtype: ValueType,
-		body: NodeId,
+		body: Vec<NodeId>,
 		info: TokenInfo,
 	) -> NodeId {
 		let kind = rtype.clone();
@@ -79,7 +79,7 @@ impl NodeStore {
 		&mut self,
 		name: Rc<str>,
 		vtype: ValueType,
-		body: NodeId,
+		body: Option<NodeId>,
 		info: TokenInfo,
 	) -> NodeId {
 		self.add(Node::new(Expr::Var { name, body }, vtype, info))
@@ -88,18 +88,16 @@ impl NodeStore {
 	pub(crate) fn new_if(
 		&mut self,
 		cond: NodeId,
-		bt: NodeId,
-		bf: Option<NodeId>,
+		bt: Vec<NodeId>,
+		bf: Vec<NodeId>,
 		info: TokenInfo,
 	) -> NodeId {
-		let bt_kind = self.data.get(bt)
-			.and_then(|n| n.as_ref())
-			.map(|n| &n.kind);
-		let bf_kind = bf.and_then(|b| self.data.get(b))
-			.and_then(|n| n.as_ref())
-			.map(|n| &n.kind);
-		let kind = match (bt_kind, bf_kind) {
-			(Some(nt), Some(nf)) => nt.meet(nf),
+		let last_true_node = bt.last()
+			.and_then(|nx| self.get(*nx).ok());
+		let last_false_node = bf.last()
+			.and_then(|nx| self.get(*nx).ok());
+		let kind = match (last_true_node, last_false_node) {
+			(Some(true_node), Some(false_node)) => true_node.kind.meet(&false_node.kind),
 			_ => ValueType::Unit,
 		};
 		self.add(Node::new(Expr::If { cond, bt, bf }, kind, info))
@@ -108,7 +106,7 @@ impl NodeStore {
 	pub(crate) fn new_while(
 		&mut self,
 		cond: NodeId,
-		body: NodeId,
+		body: Vec<NodeId>,
 		info: TokenInfo,
 	) -> NodeId {
 		self.add(Node::new(Expr::While { cond, body }, ValueType::Unit, info))
@@ -224,9 +222,7 @@ pub(crate) enum Expr {
 	Num(i64),
 	Id(Rc<str>),
 	Bool(bool),
-	Block {
-		body: Vec<NodeId>,
-	},
+	Block(Vec<NodeId>),
 	Rec {
 		name: Rc<str>,
 		fields: Vec<NodeId>,
@@ -235,20 +231,20 @@ pub(crate) enum Expr {
 		name: Rc<str>,
 		params: Vec<NodeId>,
 		rtype: ValueType,
-		body: NodeId,
+		body: Vec<NodeId>,
 	},
 	Var {
 		name: Rc<str>,
-		body: NodeId,
+		body: Option<NodeId>,
 	},
 	If {
 		cond: NodeId,
-		bt: NodeId,
-		bf: Option<NodeId>,
+		bt: Vec<NodeId>,
+		bf: Vec<NodeId>,
 	},
 	While {
 		cond: NodeId,
-		body: NodeId,
+		body: Vec<NodeId>,
 	},
 	RecInit {
 		name: Rc<str>,
@@ -273,42 +269,74 @@ pub(crate) enum Expr {
 	},
 }
 
+impl Expr {
+	pub fn is_const(&self, store: &NodeStore) -> bool {
+		match self {
+			Self::Num(_) => true,
+			Self::Bool(_) => true,
+			Self::Phi{lhs,rhs} => {
+				let Ok(lnode) = store.get(*lhs) else { return false };
+				if lnode.expr.is_const(store) {
+					store.get(*rhs).map(|rn| rn.expr.is_const(store))
+						.unwrap_or_default()
+				} else {
+					false
+				}
+			}
+			Self::Id(_) => false,
+			Self::Block(body) => {
+				if let Some(nx) = body.last() {
+					store.get(*nx).map(|n| n.expr.is_const(store))
+						.unwrap_or_default()
+				} else {
+					false
+				}
+			}
+			Self::Rec{..} => true,
+			Self::Fun{..} => true,
+			Self::Var{..} => false,
+			// TODO - srenshaw - We could check whether the conditional and/or the branches are constant
+			// and propagate the result here, but it may be better to leave that for an optimization pass
+			// somewhere else.
+			Self::If{..} => false,
+			Self::While{..} => false,
+			Self::RecInit{..} => false,
+			Self::Unary{rhs,..} => {
+				store.get(*rhs).map(|rn| rn.expr.is_const(store))
+					.unwrap_or_default()
+			}
+			Self::Binary{lhs,rhs,..} => {
+				let Ok(lnode) = store.get(*lhs) else { return false };
+				if lnode.expr.is_const(store) {
+					store.get(*rhs).map(|rn| rn.expr.is_const(store))
+						.unwrap_or_default()
+				} else {
+					false
+				}
+			}
+			Self::FnCall{..} => false,
+		}
+	}
+}
+
 impl fmt::Display for Expr {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-		fn join<T>(a: &[T], b: fn(&T) -> String) -> String {
-			a.iter()
-				.map(b)
-				.collect::<Vec<_>>()
-				.join(", ")
-		}
-
 		match self {
-			Expr::Num(n)                  => write!(fmt, "{n}"),
-			Expr::Id(s)                   => write!(fmt, "{s}"),
-			Expr::Bool(b)                 => write!(fmt, "{b}"),
-			Expr::Unary { op, rhs }       => write!(fmt, "({op} {rhs})"),
-			Expr::Var { name, body }      => write!(fmt, "(var {name} = {body})"),
-			Expr::Binary { op, lhs, rhs } => write!(fmt, "({op} {lhs} {rhs})"),
-			Expr::Phi { lhs, rhs }        => write!(fmt, "(phi {lhs} {rhs})"),
-
-			Expr::Block { body } => write!(fmt, "[{}]",
-				join(body, |n| n.to_string()),
-			),
-			Expr::While { cond, body } => write!(fmt, "(while {cond} {body})"),
-			Expr::RecInit { name, field_inits } => write!(fmt, "(init {name} [{}])",
-				join(field_inits, |(a,b)| format!("{a}: {b}")),
-			),
-			Expr::FnCall { name, args } => write!(fmt, "(call {name} [{}])",
-				join(args, |n| n.to_string()),
-			),
-			Expr::Rec { name, fields } => write!(fmt, "(rec {name} [{}])",
-				join(fields, |n| n.to_string()),
-			),
-			Expr::If { cond, bt, bf: Some(bf) } => write!(fmt, "(if {cond} {bt} {bf})"),
-			Expr::If { cond, bt, bf: None } => write!(fmt, "(if {cond} {bt} ())"),
-			Expr::Fun { name, params, rtype, body } => write!(fmt, "(fn {name} [{}] -> {rtype} {body})",
-				join(params, |n| n.to_string()),
-			),
+			Expr::While { cond, body }              => write!(fmt, "(while {cond} {body:?})"),
+			Expr::Bool(b)                           => write!(fmt, "{b}"),
+			Expr::Phi { lhs, rhs }                  => write!(fmt, "(phi {lhs} {rhs})"),
+			Expr::Num(n)                            => write!(fmt, "{n}"),
+			Expr::Id(s)                             => write!(fmt, "{s}"),
+			Expr::Block(b)                          => write!(fmt, "{b:?}"),
+			Expr::RecInit { name, field_inits }     => write!(fmt, "(init {name} {field_inits:?})"),
+			Expr::Unary { op, rhs }                 => write!(fmt, "({op} {rhs})"),
+			Expr::Binary { op, lhs, rhs }           => write!(fmt, "({op} {lhs} {rhs})"),
+			Expr::Var { name, body: Some(body) }    => write!(fmt, "(var {name} = {body})"),
+			Expr::Var { name, body: None }          => write!(fmt, "(var {name})"),
+			Expr::If { cond, bt, bf }               => write!(fmt, "(if {cond} {bt:?} {bf:?})"),
+			Expr::FnCall { name, args }             => write!(fmt, "(call {name} {args:?})"),
+			Expr::Rec { name, fields }              => write!(fmt, "(rec {name} {fields:?})"),
+			Expr::Fun { name, params, rtype, body } => write!(fmt, "(fn {name} {params:?} -> {rtype} {body:?})"),
 		}
 	}
 }

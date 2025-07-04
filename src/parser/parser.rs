@@ -13,6 +13,7 @@ use super::{
 	Expr,
 	Fix,
 	Int,
+	TokenInfo,
 	ValueType,
 };
 
@@ -310,7 +311,7 @@ impl Parser<'_,'_> {
 		}
 	}
 
-	pub(super) fn ident_typed(&mut self) -> miette::Result<(Rc<str>, NodeId)> {
+	pub(super) fn ident_typed(&mut self) -> miette::Result<(Rc<str>, ValueType, TokenInfo)> {
 		log("TypedIdent", self.dbg_depth);
 		self.dbg_depth += 2;
 		let start = self.peek(0).range().start;
@@ -318,7 +319,7 @@ impl Parser<'_,'_> {
 			.and_then(|id| self.match_token(TokenType::Colon).map(|_| id))
 			.and_then(|id| self.value_type().map(|vt| {
 				let end = self.peek(-1).range().end;
-				(Rc::clone(&id), self.nodes.new_id(id, vt, start..end))
+				(Rc::clone(&id), vt, start..end)
 			}));
 		self.dbg_depth -= 2;
 		result
@@ -359,11 +360,11 @@ impl Parser<'_,'_> {
 		self.scopes = f_scopes;
 		let bf = if self.match_token(TokenType::Else).is_ok() {
 			self.scope_push();
-			let bf = self.block().ok();
+			let bf = self.block().unwrap_or_default();
 			self.scope_pop();
 			bf
 		} else {
-			None
+			vec![]
 		};
 
 		self.scopes = self.scope_merge(t_scopes, self.scopes.clone())?;
@@ -371,6 +372,35 @@ impl Parser<'_,'_> {
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
 		Ok(self.nodes.new_if(cond, bt, bf, start..end))
+	}
+
+	fn expr_call(&mut self, lhs: NodeId, op_token: Token) -> miette::Result<NodeId> {
+		let lhs_node = self.nodes.get(lhs)?.clone();
+		let name = match lhs_node.expr {
+			Expr::Id(name) => name,
+			_ => return error!(self, "Identifier"),
+		};
+
+		self.index += 1;
+		let args = self.args().unwrap_or_default();
+
+		if TokenType::CParen != self.peek(0).tt {
+			return error!(self, ")");
+		}
+		self.index += 1;
+
+		if !self.functions.contains(&name) {
+			if let Some(rx) = self.scope_find(&name) {
+				let def = self.nodes.get(rx)?;
+				if let Expr::Fun { params,..} = &def.expr {
+					assert_eq!(args.len(), params.len(),
+						"mismatched argument and parameter lists");
+				}
+			}
+		} else {
+			panic!("Call to unknown function: '{name}'");
+		}
+		Ok(self.nodes.new_call(name, args, lhs_node.info.start..op_token.range().end))
 	}
 
 	pub(super) fn expr(&mut self, min_bp: u8) -> miette::Result<NodeId> {
@@ -467,29 +497,7 @@ impl Parser<'_,'_> {
 			}
 
 			if TT::OParen == op_token.tt {
-				let lhs_node = self.nodes.get(lhs)?.clone();
-				eprintln!("{lhs_node}");
-				let name = match lhs_node.expr {
-					Expr::Id(name) => name,
-					Expr::Fun { name, ..} => name,
-					_ => return error!(self, "Identifier"),
-				};
-
-				self.index += 1;
-				if TT::CParen == self.peek(0).tt {
-					self.index += 1;
-					lhs = self.nodes.new_call(name, vec![], lhs_node.info.start..op_token.range().end);
-					continue;
-				}
-
-				let Some(args) = self.args() else {
-					return error!(self, "Argument List");
-				};
-				if TT::CParen != self.peek(0).tt {
-					return error!(self, ")");
-				}
-				self.index += 1;
-				lhs = self.nodes.new_call(name, args, lhs_node.info.start..op_token.range().end);
+				lhs = self.expr_call(lhs, op_token)?;
 				continue;
 			}
 
@@ -520,10 +528,12 @@ impl Parser<'_,'_> {
 		let id = self.ident()?;
 		self.match_token(TokenType::Colon)?;
 		let body = if self.peek(1).tt == TokenType::OBrace {
+			let start = self.peek(1).range().start;
 			self.scope_push();
 			let body = self.block()?;
 			self.scope_pop();
-			body
+			let end = self.peek(-1).range().end;
+			self.nodes.new_block(body, start..end)
 		} else {
 			self.expr(0)?
 		};
@@ -556,7 +566,7 @@ impl Parser<'_,'_> {
 	}
 
 	/// params := ( typed_ident (',' typed_ident)* ','? )?
-	pub(super) fn params(&mut self) -> Vec<(Rc<str>, NodeId)> {
+	pub(super) fn params(&mut self) -> Vec<(Rc<str>, ValueType, TokenInfo)> {
 		log("Params", self.dbg_depth);
 		self.dbg_depth += 2;
 
@@ -578,10 +588,9 @@ impl Parser<'_,'_> {
 	}
 
 	/// block := '{' expr* '}'
-	pub(super) fn block(&mut self) -> miette::Result<NodeId> {
+	pub(super) fn block(&mut self) -> miette::Result<Vec<NodeId>> {
 		log("Block", self.dbg_depth);
 		self.dbg_depth += 2;
-		let start = self.peek(0).range().start;
 		match self.match_token(TokenType::OBrace) {
 			Ok(_) => {},
 			Err(e) => {
@@ -594,10 +603,7 @@ impl Parser<'_,'_> {
 			body.push(expr);
 		}
 		let result = self.match_token(TokenType::CBrace)
-			.map(|_| {
-				let end = self.peek(-1).range().end;
-				self.nodes.new_block(body, start..end)
-			});
+			.map(|_| body);
 		self.dbg_depth -= 2;
 		result
 	}
@@ -610,7 +616,10 @@ impl Parser<'_,'_> {
 		self.match_token(TokenType::Rec)?;
 		let name = self.ident()?;
 		self.match_token(TokenType::OBrace)?;
-		let fields = self.params().into_iter().map(|(_,nx)| nx).collect();
+		let fields = self.params()
+			.into_iter()
+			.map(|(fname, ftype, finfo)| self.nodes.new_id(fname, ftype, finfo))
+			.collect();
 		self.match_token(TokenType::CBrace)?;
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
@@ -645,9 +654,13 @@ impl Parser<'_,'_> {
 			.unwrap_or(ValueType::Unit);
 
 		self.scope_push();
-		for (pname, px) in &params {
-			self.scope_add(Rc::clone(pname), *px);
-		}
+		let params = params.iter()
+			.map(|(pname, ptype, pinfo)| {
+				let px = self.nodes.new_var(Rc::clone(pname), ptype.clone(), None, pinfo.clone());
+				self.scope_add(Rc::clone(pname), px);
+				px
+			})
+			.collect();
 		let body = self.block()?;
 		self.scope_pop();
 
@@ -664,10 +677,7 @@ impl Parser<'_,'_> {
 		}
 		self.functions.insert(Rc::clone(&name));
 
-		let params = params.into_iter().map(|(_,nx)| nx).collect();
-		let nx = self.nodes.new_fun(Rc::clone(&name), params, rtype, body, start..end);
-		self.scope_add(name, nx);
-		Ok(nx)
+		Ok(self.nodes.new_fun(Rc::clone(&name), params, rtype, body, start..end))
 	}
 
 	/// var := 'var' ident (':' value_type)? '=' (block | expr)
@@ -685,15 +695,23 @@ impl Parser<'_,'_> {
 			self.scope_push();
 			let body = self.block()?;
 			self.scope_pop();
-			body
+			*body.last()
+				.expect("FIXME")
 		} else {
 			self.expr(0)?
 		};
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
-		let nx = self.nodes.new_var(Rc::clone(&name), vtype, body, start..end);
-		self.scope_add(name, nx);
-		Ok(nx)
+
+		self.scope_add(Rc::clone(&name), body);
+
+		if self.nodes.get(body).map(|n| n.expr.is_const(&self.nodes))
+			.unwrap_or_default()
+		{
+			Ok(body)
+		} else {
+			Ok(self.nodes.new_var(name, vtype, Some(body), start..end))
+		}
 	}
 
 	/// while := 'while' expr block

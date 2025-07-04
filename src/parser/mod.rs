@@ -40,27 +40,35 @@ fn print_nodes(s: usize, nx: NodeId, ns: &NodeStore) {
 		Ok(node) => {
 			println!("[{nx:3}] {:>1$}{node}", "> ", s);
 			match &node.expr {
-				Expr::Block { body } => {
+				Expr::Block(body) => {
 					for item in body {
 						print_nodes(s + 2, *item, ns);
 					}
 				}
 				Expr::Fun { body, ..} => {
-					print_nodes(s + 2, *body, ns);
+					for item in body {
+						print_nodes(s + 2, *item, ns);
+					}
 				}
 				Expr::Var { body, ..} => {
-					print_nodes(s + 2, *body, ns);
+					if let Some(item) = body {
+						print_nodes(s + 2, *item, ns);
+					}
 				}
 				Expr::If { cond, bt, bf } => {
 					print_nodes(s + 2, *cond, ns);
-					print_nodes(s + 2, *bt, ns);
-					if let Some(bf) = bf {
-						print_nodes(s + 2, *bf, ns);
+					for item in bt {
+						print_nodes(s + 2, *item, ns);
+					}
+					for item in bf {
+						print_nodes(s + 2, *item, ns);
 					}
 				}
 				Expr::While { cond, body } => {
 					print_nodes(s + 2, *cond, ns);
-					print_nodes(s + 2, *body, ns);
+					for item in body {
+						print_nodes(s + 2, *item, ns);
+					}
 				}
 				Expr::FnCall { args, ..} => {
 					for item in args {

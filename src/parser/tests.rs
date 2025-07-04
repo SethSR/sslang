@@ -46,7 +46,7 @@ impl Tester {
 		vtype: VT,
 		body: NodeId,
 	) -> NodeId {
-		self.1.new_var(name.into(), vtype, body, 0..0)
+		self.1.new_var(name.into(), vtype, Some(body), 0..0)
 	}
 
 	fn block(
@@ -68,8 +68,7 @@ impl Tester {
 		let params = params.iter()
 			.map(|(pname, ptype)| self.1.new_id(Rc::clone(pname), ptype.clone(), 0..0))
 			.collect();
-		let body = self.block(body);
-		self.1.new_fun(name.into(), params, rtype, body, 0..0)
+		self.1.new_fun(name.into(), params, rtype, body.to_vec(), 0..0)
 	}
 
 	fn rec(
@@ -91,13 +90,7 @@ impl Tester {
 		bt: &[NodeId],
 		bf: &[NodeId],
 	) -> NodeId {
-		let bt = self.block(bt);
-		let bf = if bf.is_empty() {
-			None
-		} else {
-			Some(self.block(bf))
-		};
-		self.1.new_if(cond, bt, bf, 0..0)
+		self.1.new_if(cond, bt.to_vec(), bf.to_vec(), 0..0)
 	}
 
 	fn while_s(
@@ -105,8 +98,7 @@ impl Tester {
 		cond: NodeId,
 		body: &[NodeId],
 	) -> NodeId {
-		let body = self.block(body);
-		self.1.new_while(cond, body, 0..0)
+		self.1.new_while(cond, body.to_vec(), 0..0)
 	}
 }
 
@@ -203,7 +195,7 @@ fn assert_nodes(nxa: NodeId, sa: &NodeStore, nxb: NodeId, sb: &NodeStore) {
 		(Ok(Node { expr: a, ..}), Ok(Node { expr: b, ..})) => match (a, b) {
 			(Expr::Id(ia), Expr::Id(ib)) => assert_eq!(ia, ib),
 			(Expr::Num(na), Expr::Num(nb)) => assert_eq!(na, nb),
-			(Expr::Block { body: ba }, Expr::Block { body: bb }) => {
+			(Expr::Block(ba), Expr::Block(bb)) => {
 				assert_eq!(ba.len(), bb.len());
 				for (a,b) in ba.iter().zip(bb.iter()) {
 					assert_nodes(*a, sa, *b, sb);
@@ -217,24 +209,36 @@ fn assert_nodes(nxa: NodeId, sa: &NodeStore, nxb: NodeId, sb: &NodeStore) {
 				assert_eq!(na, nb);
 				assert_eq!(pa, pb);
 				assert_eq!(ra, rb);
-				assert_nodes(*ba, sa, *bb, sb);
+				assert_eq!(ba.len(), bb.len());
+				for (ba,bb) in ba.iter().zip(bb.iter()) {
+					assert_nodes(*ba, sa, *bb, sb);
+				}
 			}
 			(Expr::Var { name: na, body: ba }, Expr::Var { name: nb, body: bb }) => {
 				assert_eq!(na, nb);
-				assert_nodes(*ba, sa, *bb, sb);
+				match (ba,bb) {
+					(Some(ba),Some(bb)) => assert_nodes(*ba, sa, *bb, sb),
+					(None,None) => {}
+					_ => assert_eq!(ba,bb),
+				}
 			}
 			(Expr::If { cond: ca, bt: ta, bf: fa }, Expr::If { cond: cb, bt: tb, bf: fb }) => {
+				assert_eq!(ta.len(), tb.len());
+				assert_eq!(fa.len(), fb.len());
 				assert_nodes(*ca, sa, *cb, sb);
-				assert_nodes(*ta, sa, *tb, sb);
-				match (fa, fb) {
-					(Some(fa), Some(fb)) => assert_nodes(*fa, sa, *fb, sb),
-					(None, None) => {}
-					_ => panic!("{fa:?} != {fb:?}"),
+				for (ta,tb) in ta.iter().zip(tb) {
+					assert_nodes(*ta, sa, *tb, sb);
+				}
+				for (fa,fb) in fa.iter().zip(fb) {
+					assert_nodes(*fa, sa, *fb, sb);
 				}
 			}
 			(Expr::While { cond: ca, body: ba }, Expr::While { cond: cb, body: bb }) => {
 				assert_nodes(*ca, sa, *cb, sb);
-				assert_nodes(*ba, sa, *bb, sb);
+				assert_eq!(ba.len(), bb.len());
+				for (ba,bb) in ba.iter().zip(bb) {
+					assert_nodes(*ba, sa, *bb, sb);
+				}
 			}
 			(Expr::Unary { op: oa, rhs: ra }, Expr::Unary { op: ob, rhs: rb }) => {
 				assert_eq!(oa, ob);

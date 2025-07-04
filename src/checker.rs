@@ -49,7 +49,7 @@ fn update_types(
 			}
 		}
 
-		Expr::Block { body } => {
+		Expr::Block(body) => {
 			for bx in body {
 				update_types(bx, r_store, f_store, scopes, n_store);
 			}
@@ -57,7 +57,9 @@ fn update_types(
 
 		Expr::While { cond, body } => {
 			update_types(cond, r_store, f_store, scopes, n_store);
-			update_types(body, r_store, f_store, scopes, n_store);
+			for bx in body {
+				update_types(bx, r_store, f_store, scopes, n_store);
+			}
 		}
 
 		Expr::RecInit { name, field_inits, ..} => {
@@ -96,29 +98,39 @@ fn update_types(
 		// TODO - srenshaw - Add initializers to Variable declarations.
 		Expr::Var { name: _, body } => {
 			// TODO - srenshaw - Ensure initializer and declaration match.
-			update_types(body, r_store, f_store, scopes, n_store);
+			if let Some(bx) = body {
+				update_types(bx, r_store, f_store, scopes, n_store);
+			}
 		}
 
 		Expr::If { cond, bt, bf } => {
 			update_types(cond, r_store, f_store, scopes, n_store);
 
-			update_types(bt, r_store, f_store, scopes, n_store);
-			let tkind = n_store.get(bt)
+			for nx in &bt {
+				update_types(*nx, r_store, f_store, scopes, n_store);
+			}
+
+			let tkind = bt.last().and_then(|nx| n_store.get(*nx).ok())
 				.map(|n| n.kind.clone())
 				.expect("missing true-kind in node_store");
 
-			if let Some(bf) = bf {
-				update_types(bf, r_store, f_store, scopes, n_store);
-				let fkind = n_store.get(bf)
+			// Just THEN clause
+			if bf.is_empty() {
+				assert_eq!(tkind, ValueType::Unit);
+			}
+			// Has ELSE clause
+			else {
+				assert!(bt.len() == bf.len());
+
+				for nx in &bf {
+					update_types(*nx, r_store, f_store, scopes, n_store);
+				}
+
+				let fkind = bf.last().and_then(|nx| n_store.get(*nx).ok())
 					.map(|n| n.kind.clone())
 					.expect("missing false-kind in node_store");
 
-				if tkind != fkind {
-					eprintln!("- IF branches have different types: {tkind} != {fkind}");
-				}
-			} else if tkind != ValueType::Unit {
-				eprintln!("- missing else-branch, then-branch returns type {tkind}");
-				return;
+				assert_eq!(tkind, fkind, "- IF branches have different types: {tkind} != {fkind}");
 			}
 		}
 
@@ -196,8 +208,10 @@ fn update_types(
 				}
 			}
 
-			update_types(body, r_store, f_store, scopes, n_store);
-			let bkind = n_store.get(body)
+			for bx in &body {
+				update_types(*bx, r_store, f_store, scopes, n_store);
+			}
+			let bkind = body.last().and_then(|bx| n_store.get(*bx).ok())
 				.map(|n| n.kind.clone())
 				.expect("missing body-kind in node_store");
 

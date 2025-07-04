@@ -117,7 +117,7 @@ fn main() -> miette::Result<()> {
 	if options.debug.contains(&Stage::Parser) {
 		debug!("Start ID: {}", out.start);
 		for (nx, node) in out.store.iter() {
-			debug!("[{nx:>3}]: {node:?}");
+			debug!("[{nx:>3}]: {node}");
 		}
 	}
 

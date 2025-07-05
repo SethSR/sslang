@@ -52,14 +52,16 @@ macro_rules! error {
 
 pub(crate) type Scope = HashMap<Rc<str>, NodeId>;
 
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ScopeTracker(Vec<Scope>);
+
 #[derive(Debug)]
 pub(super) struct Parser<'a,'b> {
 	input: &'a [Token],
 	source: &'b str,
 	index: usize,
 
-	scope_index: usize,
-	pub(super) scopes: Vec<Scope>,
+	pub(super) scopes: ScopeTracker,
 
 	// TODO - srenshaw - All of these fields will probably be moved into a Scope structure.
 	pub(super) nodes: NodeStore,
@@ -77,8 +79,7 @@ impl<'a,'b> Parser<'a,'b> {
 			input,
 			index: 0,
 
-			scope_index: 0,
-			scopes: Vec::default(),
+			scopes: ScopeTracker::default(),
 
 			nodes: NodeStore::default(),
 			records: HashSet::default(),
@@ -95,21 +96,22 @@ impl<'a,'b> Parser<'a,'b> {
 	/// program := expr*
 	pub fn program(&mut self) -> miette::Result<NodeId> {
 		let mut program = Vec::default();
-		self.scope_push();
+		self.scopes.push();
 		while self.peek(0).tt != TokenType::Eof {
 			let nx = self.expr(0)?;
 			let node = self.nodes.get(nx)?;
 			match &node.expr {
 				Expr::Var { name, ..} |
 				Expr::Fun { name, ..} => {
-					self.scope_add(Rc::clone(name), nx);
+					self.scopes.insert(name, nx);
 				}
 				_ => {}
 			}
 			program.push(nx);
 		}
-		self.scope_pop();
-		let nx = self.nodes.new_block(program, 0..self.source.len());
+		let scope = self.scopes.pop()
+			.expect("empty scope-list in `parser::program`");
+		let nx = self.nodes.new_block(program, scope, 0..self.source.len());
 		Ok(nx)
 	}
 }
@@ -352,22 +354,30 @@ impl Parser<'_,'_> {
 
 		let f_scopes = self.scopes.clone();
 
-		self.scope_push();
-		let bt = self.block()?;
-		self.scope_pop();
+		let bt = {
+			self.scopes.push();
+			let (body, info) = self.block()?;
+			let scope = self.scopes.pop()
+				.expect("empty scope-list in `parser::stmt_if::true_block`");
+			self.nodes.new_block(body, scope, info)
+		};
 		let t_scopes = self.scopes.clone();
 
 		self.scopes = f_scopes;
 		let bf = if self.match_token(TokenType::Else).is_ok() {
-			self.scope_push();
-			let bf = self.block().unwrap_or_default();
-			self.scope_pop();
-			bf
+			self.scopes.push();
+			let (body, info) = self.block()?;
+			let scope = self.scopes.pop()
+				.expect("empty scope-list in `parser::stmt_if::false_block`");
+			Some(self.nodes.new_block(body, scope, info))
 		} else {
-			vec![]
+			None
 		};
 
-		self.scopes = self.scope_merge(t_scopes, self.scopes.clone())?;
+		self.scopes = ScopeTracker::merge(
+			&mut self.nodes,
+			t_scopes,
+			self.scopes.clone())?;
 
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
@@ -390,7 +400,7 @@ impl Parser<'_,'_> {
 		self.index += 1;
 
 		if !self.functions.contains(&name) {
-			if let Some(rx) = self.scope_find(&name) {
+			if let Some(rx) = self.scopes.find(&name) {
 				let def = self.nodes.get(rx)?;
 				if let Expr::Fun { params,..} = &def.expr {
 					assert_eq!(args.len(), params.len(),
@@ -398,7 +408,13 @@ impl Parser<'_,'_> {
 				}
 			}
 		} else {
-			panic!("Call to unknown function: '{name}'");
+			return Err(miette::miette! {
+				code = self.source,
+				labels = [
+					LabeledSpan::at(op_token.range(), "here"),
+				],
+				"Call to unknown function: '{name}'",
+			});
 		}
 		Ok(self.nodes.new_call(name, args, lhs_node.info.start..op_token.range().end))
 	}
@@ -432,11 +448,11 @@ impl Parser<'_,'_> {
 					self.expr_rec_init()?
 				} else {
 					self.index += 1;
-					if let Some(nx) = self.scope_find(s) {
+					if let Some(nx) = self.scopes.find(s) {
 						nx
 					} else {
 						let nx = self.nodes.new_id(Rc::clone(s), ValueType::Any, left_token.range());
-						self.scope_add(Rc::clone(s), nx);
+						self.scopes.insert(s, nx);
 						nx
 					}
 				}
@@ -530,12 +546,11 @@ impl Parser<'_,'_> {
 		let id = self.ident()?;
 		self.match_token(TokenType::Colon)?;
 		let body = if self.peek(1).tt == TokenType::OBrace {
-			let start = self.peek(1).range().start;
-			self.scope_push();
-			let body = self.block()?;
-			self.scope_pop();
-			let end = self.peek(-1).range().end;
-			self.nodes.new_block(body, start..end)
+			self.scopes.push();
+			let (body, info) = self.block()?;
+			let scope = self.scopes.pop()
+				.expect("empty scope-list in `parser::field_init`");
+			self.nodes.new_block(body, scope, info)
 		} else {
 			self.expr(0)?
 		};
@@ -590,9 +605,10 @@ impl Parser<'_,'_> {
 	}
 
 	/// block := '{' expr* '}'
-	pub(super) fn block(&mut self) -> miette::Result<Vec<NodeId>> {
+	pub(super) fn block(&mut self) -> miette::Result<(Vec<NodeId>, TokenInfo)> {
 		log("Block", self.dbg_depth);
 		self.dbg_depth += 2;
+		let start = self.peek(0).range().start;
 		match self.match_token(TokenType::OBrace) {
 			Ok(_) => {},
 			Err(e) => {
@@ -605,7 +621,10 @@ impl Parser<'_,'_> {
 			body.push(expr);
 		}
 		let result = self.match_token(TokenType::CBrace)
-			.map(|_| body);
+			.map(|_| {
+				let end = self.peek(-1).range().end;
+				(body, start..end)
+			});
 		self.dbg_depth -= 2;
 		result
 	}
@@ -637,7 +656,7 @@ impl Parser<'_,'_> {
 		self.records.insert(Rc::clone(&name));
 
 		let nx = self.nodes.new_rec(Rc::clone(&name), fields, start..end);
-		self.scope_add(name, nx);
+		self.scopes.insert(&name, nx);
 		Ok(nx)
 	}
 
@@ -655,16 +674,19 @@ impl Parser<'_,'_> {
 			.and_then(|_| self.value_type())
 			.unwrap_or(ValueType::Unit);
 
-		self.scope_push();
-		let params = params.iter()
-			.map(|(pname, ptype, pinfo)| {
-				let px = self.nodes.new_var(Rc::clone(pname), ptype.clone(), None, pinfo.clone());
-				self.scope_add(Rc::clone(pname), px);
-				px
-			})
-			.collect();
-		let body = self.block()?;
-		self.scope_pop();
+		let (params, body) = {
+			self.scopes.push();
+			let params = params.iter()
+				.map(|(pname, ptype, pinfo)| {
+					let px = self.nodes.new_var(Rc::clone(pname), ptype.clone(), None, pinfo.clone());
+					self.scopes.insert(pname, px)
+				})
+				.collect();
+			let (body,info) = self.block()?;
+			let scope = self.scopes.pop()
+				.expect("empty scope-list in `parser::stmt_fn`");
+			(params, self.nodes.new_block(body, scope, info))
+		};
 
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
@@ -694,18 +716,18 @@ impl Parser<'_,'_> {
 			.unwrap_or(ValueType::Unit);
 		self.match_token(TokenType::Eq1)?;
 		let body = if self.peek(0).tt == TokenType::OBrace {
-			self.scope_push();
-			let body = self.block()?;
-			self.scope_pop();
-			*body.last()
-				.expect("FIXME")
+			self.scopes.push();
+			let (body,info) = self.block()?;
+			let scope = self.scopes.pop()
+				.expect("empty scope-list in `parser::stmt_var`");
+			self.nodes.new_block(body, scope, info)
 		} else {
 			self.expr(0)?
 		};
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
 
-		self.scope_add(Rc::clone(&name), body);
+		self.scopes.insert(&name, body);
 
 		if self.nodes.get(body).map(|n| n.expr.is_const(&self.nodes))
 			.unwrap_or_default()
@@ -723,36 +745,49 @@ impl Parser<'_,'_> {
 		let start = self.peek(0).range().start;
 		self.match_token(TokenType::While)?;
 		let cond = self.expr(0)?;
-		self.scope_push();
-		let body = self.block()?;
-		self.scope_pop();
+		let body = {
+			self.scopes.push();
+			let (body, info) = self.block()?;
+			let scope = self.scopes.pop()
+				.expect("empty scope-list in `parser::stmt_while`");
+			self.nodes.new_block(body, scope, info)
+		};
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
 		Ok(self.nodes.new_while(cond, body, start..end))
 	}
 }
 
-impl Parser<'_,'_> {
-	fn scope_add(&mut self, name: Rc<str>, nx: NodeId) {
-		println!("add {name} : {nx} to scope");
-		self.scopes[self.scope_index-1].insert(name, nx);
+impl ScopeTracker {
+	/// Used in type-checking (and potentially elsewhere) to re-add block scopes.
+	pub fn add(&mut self, scope: Scope) {
+		self.0.push(scope)
 	}
 
-	fn scope_push(&mut self) {
-		println!("pushed a scope");
-		self.scope_index += 1;
-		if self.scope_index >= self.scopes.len() {
-			self.scopes.push(HashMap::default());
+	fn insert(&mut self, name: &Rc<str>, nx: NodeId) -> NodeId {
+		let index = self.0.len();
+		if let Some(scope) = self.0.last_mut() {
+			println!("add {name} : {nx} to scope {}", index-1);
+			scope.insert(Rc::clone(name), nx);
+			nx
+		} else {
+			panic!("add {name} : {nx} with no base scope");
 		}
 	}
 
-	fn scope_pop(&mut self) {
-		println!("popped a scope");
-		self.scope_index -= 1;
+	fn push(&mut self) {
+		println!("pushing a scope | prev-top {:?}", self.0.last());
+		self.0.push(Scope::default());
 	}
 
-	fn scope_find(&mut self, id: &Rc<str>) -> Option<NodeId> {
-		for scope in self.scopes.iter().rev() {
+	fn pop(&mut self) -> Option<Scope> {
+		let last = self.0.pop();
+		println!("popping a scope | prev-top {last:?}");
+		last
+	}
+
+	pub fn find(&self, id: &Rc<str>) -> Option<NodeId> {
+		for scope in self.0.iter().rev() {
 			if let Some(&nx) = scope.get(id) {
 				return Some(nx);
 			}
@@ -760,54 +795,40 @@ impl Parser<'_,'_> {
 		None
 	}
 
-	fn scope_merge(
-		&mut self,
-		mut t_scopes: Vec<Scope>,
-		mut f_scopes: Vec<Scope>,
-	) -> miette::Result<Vec<Scope>> {
+	fn merge(
+		nodes: &mut NodeStore,
+		mut t_scopes: ScopeTracker,
+		mut f_scopes: ScopeTracker,
+	) -> miette::Result<ScopeTracker> {
 		println!("merging scopes");
 
 		let mut scopes = vec![];
 
-		let mut index = 0;
-		while index < t_scopes.len() || index < f_scopes.len() {
-			let mut scope = HashMap::default();
+		let mut t_iter = t_scopes.0.iter_mut();
+		let mut f_iter = f_scopes.0.iter_mut();
+		loop {
+			let mut scope = Scope::default();
 
-			match (t_scopes.get_mut(index), f_scopes.get_mut(index)) {
+			match (t_iter.next(), f_iter.next()) {
 				(Some(t_scope), Some(f_scope)) => {
 					for (name, tnx) in t_scope.iter() {
-						if let Some(fnx) = f_scope.remove(name) {
-							let tnode = self.nodes.get(*tnx);
-							let fnode = self.nodes.get(fnx);
-							match (tnode, fnode) {
-								(Ok(a), Ok(b)) if a == b => {}
-								_ => {
-									let nx = self.nodes.new_phi(*tnx, fnx)?;
-									scope.insert(Rc::clone(name), nx);
-								}
-							}
-						} else {
-							scope.insert(Rc::clone(name), *tnx);
-						}
+						let nx = f_scope.remove(name)
+							.filter(|fnx| tnx != fnx)
+							.map(|fnx| nodes.new_phi(*tnx, fnx))
+							.unwrap_or(Ok(*tnx))?;
+						scope.insert(Rc::clone(name), nx);
 					}
 
 					for (name, fnx) in f_scope {
-						if let Some(tnx) = t_scope.remove(name) {
-							let fnode = self.nodes.get(*fnx);
-							let tnode = self.nodes.get(tnx);
-							match (fnode, tnode) {
-								(Ok(a), Ok(b)) if a == b => {}
-								_ => {
-									let nx = self.nodes.new_phi(tnx, *fnx)?;
-									scope.insert(Rc::clone(name), nx);
-								}
-							}
-						} else {
-							scope.insert(Rc::clone(name), *fnx);
-						}
+						let nx = t_scope.remove(name)
+							.filter(|tnx| tnx != fnx)
+							.map(|tnx| nodes.new_phi(tnx, *fnx))
+							.unwrap_or(Ok(*fnx))?;
+						scope.insert(Rc::clone(name), nx);
 					}
 				}
 
+				// Just copy over missing nodes
 				(Some(o_scope), None) |
 				(None, Some(o_scope)) => {
 					for (name, nx) in o_scope {
@@ -819,10 +840,51 @@ impl Parser<'_,'_> {
 			}
 
 			scopes.push(scope);
-			index += 1;
 		}
 
-		Ok(scopes)
+		Ok(ScopeTracker(scopes))
 	}
+}
+
+#[test]
+fn test_merge() {
+	let mut n = NodeStore::default();
+	let n0 = n.new_num(0, ValueType::Any, 0..0);
+	let n1 = n.new_num(0, ValueType::Any, 0..0);
+	let n2 = n.new_num(0, ValueType::Any, 0..0);
+	let n3 = n.new_num(0, ValueType::Any, 0..0);
+	let n4 = n3 + 1;
+
+	let mut s1 = ScopeTracker::default();
+	s1.push();
+	s1.insert(&"a".into(), n0);
+	s1.push();
+	s1.insert(&"b".into(), n1);
+	s1.insert(&"c".into(), n2);
+	s1.push();
+
+	let mut s2 = ScopeTracker::default();
+	s2.push();
+	s2.push();
+	s2.insert(&"a".into(), n1);
+	s2.insert(&"b".into(), n3);
+	s2.insert(&"c".into(), n2);
+
+	let s3 = ScopeTracker::merge(&mut n, s1, s2)
+		.expect("unable to merge s1 and s2");
+	assert_eq!(s3.0.len(), 3);
+
+	let phi = n.get(n4)
+		.unwrap_or_else(|_| panic!("no phi node for id 'b'\n\nNodes: {n:?}"));
+	assert_eq!(phi.expr, Expr::Phi { lhs: n1, rhs: n3 });
+
+	let mut temp1 = Scope::default();
+	temp1.insert("a".into(), n0);
+	assert_eq!(s3.0[0], temp1);
+	let mut temp2 = Scope::default();
+	temp2.insert("a".into(), n1);
+	temp2.insert("b".into(), n4);
+	temp2.insert("c".into(), n2);
+	assert_eq!(s3.0[1], temp2);
 }
 

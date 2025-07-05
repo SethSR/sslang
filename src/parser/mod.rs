@@ -17,7 +17,7 @@ mod tests;
 pub(crate) use types::{Meet, ValueType, Int, Fix};
 pub(crate) use operators::{BinaryOp, UnaryOp};
 pub(crate) use node::{Expr, Node, NodeId, NodeStore};
-pub(crate) use parser::Scope;
+pub(crate) use parser::ScopeTracker;
 
 pub(crate) type TokenInfo = Range<usize>;
 #[cfg(test)]
@@ -31,7 +31,7 @@ pub(crate) struct Output {
 	pub(crate) store: NodeStore,
 	pub(crate) records: HashSet<Rc<str>>,
 	pub(crate) functions: HashSet<Rc<str>>,
-	pub(crate) scopes: Vec<Scope>,
+	pub(crate) scopes: ScopeTracker,
 }
 
 fn print_nodes(s: usize, nx: NodeId, ns: &NodeStore) {
@@ -40,15 +40,13 @@ fn print_nodes(s: usize, nx: NodeId, ns: &NodeStore) {
 		Ok(node) => {
 			println!("[{nx:3}] {:>1$}{node}", "> ", s);
 			match &node.expr {
-				Expr::Block(body) => {
+				Expr::Block{body,..} => {
 					for item in body {
 						print_nodes(s + 2, *item, ns);
 					}
 				}
 				Expr::Fun { body, ..} => {
-					for item in body {
-						print_nodes(s + 2, *item, ns);
-					}
+					print_nodes(s + 2, *body, ns);
 				}
 				Expr::Var { body, ..} => {
 					if let Some(item) = body {
@@ -57,18 +55,14 @@ fn print_nodes(s: usize, nx: NodeId, ns: &NodeStore) {
 				}
 				Expr::If { cond, bt, bf } => {
 					print_nodes(s + 2, *cond, ns);
-					for item in bt {
-						print_nodes(s + 2, *item, ns);
-					}
-					for item in bf {
-						print_nodes(s + 2, *item, ns);
+					print_nodes(s + 2, *bt, ns);
+					if let Some(bf) = bf {
+						print_nodes(s + 2, *bf, ns);
 					}
 				}
 				Expr::While { cond, body } => {
 					print_nodes(s + 2, *cond, ns);
-					for item in body {
-						print_nodes(s + 2, *item, ns);
-					}
+					print_nodes(s + 2, *body, ns);
 				}
 				Expr::FnCall { args, ..} => {
 					for item in args {

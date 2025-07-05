@@ -3,6 +3,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use super::{BinaryOp, Meet, TokenInfo, UnaryOp, ValueType};
+use super::parser::Scope;
 
 pub(crate) type NodeId = usize;
 
@@ -22,13 +23,14 @@ impl NodeStore {
 }
 
 impl NodeStore {
-	pub(crate) fn new_block(&mut self, body: Vec<NodeId>, info: TokenInfo) -> NodeId {
+	pub(crate) fn new_block(&mut self, body: Vec<NodeId>, scope: Scope, info: TokenInfo) -> NodeId {
+		println!("Saving block scope: {scope:?}");
 		let kind = body.last()
 			.and_then(|nx| self.data.get(*nx))
 			.and_then(|n| n.as_ref())
 			.map(|n| n.kind.clone())
 			.unwrap_or(ValueType::Unit);
-		self.add(Node::new(Expr::Block(body), kind, info))
+		self.add(Node::new(Expr::Block { body, scope }, kind, info))
 	}
 
 	pub(crate) fn new_bool(&mut self, b: bool, info: TokenInfo) -> NodeId {
@@ -68,7 +70,7 @@ impl NodeStore {
 		name: Rc<str>,
 		params: Vec<NodeId>,
 		rtype: ValueType,
-		body: Vec<NodeId>,
+		body: NodeId,
 		info: TokenInfo,
 	) -> NodeId {
 		let kind = rtype.clone();
@@ -88,16 +90,16 @@ impl NodeStore {
 	pub(crate) fn new_if(
 		&mut self,
 		cond: NodeId,
-		bt: Vec<NodeId>,
-		bf: Vec<NodeId>,
+		bt: NodeId,
+		bf: Option<NodeId>,
 		info: TokenInfo,
 	) -> NodeId {
-		let last_true_node = bt.last()
-			.and_then(|nx| self.get(*nx).ok());
-		let last_false_node = bf.last()
-			.and_then(|nx| self.get(*nx).ok());
-		let kind = match (last_true_node, last_false_node) {
-			(Some(true_node), Some(false_node)) => true_node.kind.meet(&false_node.kind),
+		let tkind = self.get(bt).ok()
+			.map(|n| &n.kind);
+		let fkind = bf.and_then(|nx| self.get(nx).ok())
+			.map(|n| &n.kind);
+		let kind = match (tkind, fkind) {
+			(Some(true_node), Some(false_node)) => true_node.meet(false_node),
 			_ => ValueType::Unit,
 		};
 		self.add(Node::new(Expr::If { cond, bt, bf }, kind, info))
@@ -106,7 +108,7 @@ impl NodeStore {
 	pub(crate) fn new_while(
 		&mut self,
 		cond: NodeId,
-		body: Vec<NodeId>,
+		body: NodeId,
 		info: TokenInfo,
 	) -> NodeId {
 		self.add(Node::new(Expr::While { cond, body }, ValueType::Unit, info))
@@ -222,7 +224,10 @@ pub(crate) enum Expr {
 	Num(i64),
 	Id(Rc<str>),
 	Bool(bool),
-	Block(Vec<NodeId>),
+	Block {
+		body: Vec<NodeId>,
+		scope: Scope,
+	},
 	Rec {
 		name: Rc<str>,
 		fields: Vec<NodeId>,
@@ -231,7 +236,7 @@ pub(crate) enum Expr {
 		name: Rc<str>,
 		params: Vec<NodeId>,
 		rtype: ValueType,
-		body: Vec<NodeId>,
+		body: NodeId,
 	},
 	Var {
 		name: Rc<str>,
@@ -239,12 +244,12 @@ pub(crate) enum Expr {
 	},
 	If {
 		cond: NodeId,
-		bt: Vec<NodeId>,
-		bf: Vec<NodeId>,
+		bt: NodeId,
+		bf: Option<NodeId>,
 	},
 	While {
 		cond: NodeId,
-		body: Vec<NodeId>,
+		body: NodeId,
 	},
 	RecInit {
 		name: Rc<str>,
@@ -284,7 +289,7 @@ impl Expr {
 				}
 			}
 			Self::Id(_) => false,
-			Self::Block(body) => {
+			Self::Block{body,..} => {
 				if let Some(nx) = body.last() {
 					store.get(*nx).map(|n| n.expr.is_const(store))
 						.unwrap_or_default()
@@ -327,7 +332,7 @@ impl fmt::Display for Expr {
 			Expr::Phi { lhs, rhs }                  => write!(fmt, "(phi {lhs} {rhs})"),
 			Expr::Num(n)                            => write!(fmt, "{n}"),
 			Expr::Id(s)                             => write!(fmt, "{s}"),
-			Expr::Block(b)                          => write!(fmt, "{b:?}"),
+			Expr::Block{body,..}                    => write!(fmt, "{body:?}"),
 			Expr::RecInit { name, field_inits }     => write!(fmt, "(init {name} {field_inits:?})"),
 			Expr::Unary { op, rhs }                 => write!(fmt, "({op} {rhs})"),
 			Expr::Binary { op, lhs, rhs }           => write!(fmt, "({op} {lhs} {rhs})"),

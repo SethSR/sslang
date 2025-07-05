@@ -17,37 +17,27 @@ use super::{
 	ValueType,
 };
 
-macro_rules! error {
-	(eof, $parser:expr, $msg:expr) => {
-		Err(miette::miette! {
-			labels = vec![
-				LabeledSpan::at(
-					$parser.peek(-1).range(),
-					"after here")
-			],
-			"Expected {:?}, Found EoF", $msg
-		}.with_source_code($parser.source.to_owned()))
-	};
-	($tt:expr, $parser:expr, $msg:expr) => {
-		Err(miette::miette! {
-			labels = vec![
-				LabeledSpan::at(
-					$parser.peek(0).range(),
-					"here")
-			],
-			"Expected {:?}, Found {:?}", $msg, $tt,
-		}.with_source_code($parser.source.to_owned()))
-	};
-	($parser:expr, $msg:expr) => {
-		Err(miette::miette! {
-			labels = vec![
-				LabeledSpan::at(
-					$parser.peek(0).range(),
-					"here")
-			],
-			"Expected {:?}, Found {:?}", $msg, $parser.peek(0),
-		}.with_source_code($parser.source.to_owned()))
-	}
+fn report(source: &str, info: TokenInfo, marker: &str, msg: &str) -> miette::Report {
+	miette::miette! {
+		labels = [
+			LabeledSpan::at(info, marker),
+		],
+		"{msg}"
+	}.with_source_code(source.to_owned())
+}
+
+fn error(source: &str, info: TokenInfo, msg: &str) -> miette::Report {
+	report(source, info, "here", msg)
+}
+
+fn eof_error(parser: &Parser, msg: &str) -> miette::Report {
+	report(parser.source, parser.peek(-1).range(), "after here",
+		&format!("Expected {msg}, Found EoF"))
+}
+
+fn expected(parser: &Parser, msg: &str) -> miette::Report {
+	report(parser.source, parser.peek(0).range(), "here",
+		&format!("Expected {msg}, Found {:?}", parser.peek(0)))
 }
 
 pub(crate) type Scope = HashMap<Rc<str>, NodeId>;
@@ -223,8 +213,8 @@ impl Parser<'_,'_> {
 					.into_diagnostic()
 					.wrap_err("lexer should not allow invalid fixed-point values")?))
 			}
-			TokenType::Eof => error!(eof, self, "Number"),
-			_ => error!(self, "Number"),
+			TokenType::Eof => Err(eof_error(self, "Number")),
+			_ => Err(expected(self, "Number")),
 		};
 		self.dbg_depth -= 2;
 		out
@@ -239,8 +229,8 @@ impl Parser<'_,'_> {
 				self.index += 1;
 				Ok(s)
 			}
-			TokenType::Eof => error!(eof, self, "Identifier"),
-			_ => error!(self, "Identifier"),
+			TokenType::Eof => Err(eof_error(self, "Identifier")),
+			_ => Err(expected(self, "Identifier")),
 		};
 		self.dbg_depth -= 2;
 		out
@@ -250,12 +240,8 @@ impl Parser<'_,'_> {
 		let token = self.peek(0);
 		let token_str = token.to_string();
 		let Some(bit_spec) = token_str.strip_prefix(prefix) else {
-			return Err(miette::miette! {
-				labels = vec![
-					LabeledSpan::at(token.range(), "here"),
-				],
-				"Parsed a Fixed-point type that doesn't start with '{prefix}'"
-			}.with_source_code(self.source.to_owned()));
+			let msg = format!("Parsed as fixed-point type that doesn't start with '{prefix}'");
+			return Err(error(self.source, token.range(), &msg));
 		};
 
 		let bits = if bit_spec.is_empty() {
@@ -263,17 +249,14 @@ impl Parser<'_,'_> {
 		} else if let Ok(bits) = bit_spec.parse::<u8>() {
 			bits
 		} else {
-			return Err(miette::miette! {
-				labels = vec![
-					LabeledSpan::at(token.range(), "here"),
-				],
-				"Unable to parse '{token}' into Fixed-point type"
-			}.with_source_code(self.source.to_owned()));
+			let msg = format!("Unable to parse '{token}' into fixed-point type");
+			return Err(error(self.source, token.range(), &msg));
 		};
 
 		if bits > max_bits {
-			return error!(token, self, format!("Bit specifier between 0..={max_bits}"));
+			return Err(expected(self, &format!("Bit specifier between 0..={max_bits}")));
 		}
+
 		Ok(bits)
 	}
 
@@ -291,7 +274,7 @@ impl Parser<'_,'_> {
 			TokenType::F16(_) => self.parse_fixed_point("fw", 16).map(ValueType::to_f16),
 			TokenType::F32(_) => self.parse_fixed_point("fd", 32).map(ValueType::to_f32),
 			TokenType::Ident(ref s) => Ok(ValueType::Udt(Rc::clone(s))),
-			_ => error!(token.tt, self, "Value Type"),
+			_ => Err(expected(self, "Value Type")),
 		};
 		self.index += 1;
 		log_item(&token, self.dbg_depth);
@@ -302,9 +285,10 @@ impl Parser<'_,'_> {
 	pub(super) fn match_token(&mut self, tt: TokenType) -> miette::Result<()> {
 		match self.peek(0).tt.clone() {
 			t if t != tt => if t == TokenType::Eof {
-				error!(eof, self, tt)
+				Err(report(self.source, self.peek(-1).range(), "after here",
+					&format!("Expected {tt:?}. Found EoF")))
 			} else {
-				error!(self, tt)
+				Err(expected(self, &format!("{tt:?}")))
 			}
 			_ => {
 				self.index += 1;
@@ -388,14 +372,14 @@ impl Parser<'_,'_> {
 		let lhs_node = self.nodes.get(lhs)?.clone();
 		let name = match lhs_node.expr {
 			Expr::Id(name) => name,
-			_ => return error!(self, "Identifier"),
+			_ => return Err(expected(self, "Identifier")),
 		};
 
 		self.index += 1;
 		let args = self.args().unwrap_or_default();
 
 		if TokenType::CParen != self.peek(0).tt {
-			return error!(self, ")");
+			return Err(expected(self, ")"));
 		}
 		self.index += 1;
 
@@ -408,13 +392,9 @@ impl Parser<'_,'_> {
 				}
 			}
 		} else {
-			return Err(miette::miette! {
-				code = self.source,
-				labels = [
-					LabeledSpan::at(op_token.range(), "here"),
-				],
-				"Call to unknown function: '{name}'",
-			});
+			return Err(error(self.source, op_token.range(),
+				&format!("Call to unknown function '{name}'"),
+			));
 		}
 		Ok(self.nodes.new_call(name, args, lhs_node.info.start..op_token.range().end))
 	}
@@ -472,7 +452,7 @@ impl Parser<'_,'_> {
 				self.index += 1;
 				let lhs = self.expr(0)?;
 				if TT::CParen != self.peek(0).tt {
-					return error!(self, ")");
+					return Err(expected(self, ")"));
 				}
 				self.index += 1;
 				lhs
@@ -484,7 +464,7 @@ impl Parser<'_,'_> {
 			TT::At |
 			TT::Bang => {
 				let Some(r_bp) = prefix_binding_power(&self.peek(0).tt) else {
-					return error!(self, "Expected 'Unary Operator'");
+					return Err(expected(self, "Unary Operator"));
 				};
 				self.index += 1;
 				let rhs = self.expr(r_bp)?;
@@ -492,11 +472,9 @@ impl Parser<'_,'_> {
 					.map_err(|err| err.with_source_code(self.source.to_string()))?
 			}
 
-			TT::Eof => return error!(eof, self,
-				"Identifier, Function Call, or Literal"),
+			TT::Eof => return Err(eof_error(self, "Identifier, Function Call, or Literal")),
 
-			_ => return error!(self,
-				"Identifier, Function Call, or Literal"),
+			_ => return Err(expected(self, "Identifier, Function Call, or Literal")),
 		};
 
 		loop {
@@ -646,12 +624,8 @@ impl Parser<'_,'_> {
 		self.dbg_depth -= 2;
 
 		if self.records.contains(&name) {
-			return Err(miette::miette! {
-				labels = vec![
-					LabeledSpan::at(start..end, "here"),
-				],
-				"A Record with this name is already defined."
-			});
+			return Err(error(self.source, start..end,
+				"A record with this name is already defined"));
 		}
 		self.records.insert(Rc::clone(&name));
 
@@ -692,12 +666,8 @@ impl Parser<'_,'_> {
 		self.dbg_depth -= 2;
 
 		if self.functions.contains(&name) {
-			return Err(miette::miette! {
-				labels = vec![
-					LabeledSpan::at(start..end, "here"),
-				],
-				"A Function with this name is already defined."
-			});
+			return Err(error(self.source, start..end,
+				"A function with this name is already defined"));
 		}
 		self.functions.insert(Rc::clone(&name));
 

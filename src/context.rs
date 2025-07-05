@@ -1,4 +1,5 @@
 
+#[derive(Debug, Default)]
 pub(crate) struct Data {
 	frames: Vec<String>,
 }

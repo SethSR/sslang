@@ -26,7 +26,7 @@ impl Tester {
 	}
 
 	fn ident(&mut self, s: &str) -> NodeId {
-		self.1.new_id(s.into(), VT::Any, 0..0)
+		self.1.new_id(&s.into(), VT::Any, 0..0)
 	}
 
 	fn unary(&mut self, op: UnaryOp, rhs: NodeId) -> miette::Result<NodeId> {
@@ -38,7 +38,7 @@ impl Tester {
 	}
 
 	fn call(&mut self, name: &str, s: &[NodeId]) -> NodeId {
-		self.1.new_call(name.into(), s.to_vec(), 0..0)
+		self.1.new_call(&name.into(), s.to_vec(), 0..0)
 	}
 
 	fn var(
@@ -47,7 +47,7 @@ impl Tester {
 		vtype: VT,
 		body: NodeId,
 	) -> NodeId {
-		self.1.new_var(name.into(), vtype, Some(body), 0..0)
+		self.1.new_var(&name.into(), vtype, Some(body), 0..0)
 	}
 
 	fn block(
@@ -64,13 +64,11 @@ impl Tester {
 		rtype: VT,
 		body: &[NodeId],
 	) -> NodeId {
-		use std::rc::Rc;
-
 		let params = params.iter()
-			.map(|(pname, ptype)| self.1.new_id(Rc::clone(pname), ptype.clone(), 0..0))
+			.map(|(pname, ptype)| self.1.new_id(pname, ptype.clone(), 0..0))
 			.collect();
 		let body = self.block(body);
-		self.1.new_fun(name.into(), params, rtype, body, 0..0)
+		self.1.new_fun(&name.into(), params, rtype, body, 0..0)
 	}
 
 	fn rec(
@@ -78,12 +76,10 @@ impl Tester {
 		name: &str,
 		fields: &[TypedIdent],
 	) -> NodeId {
-		use std::rc::Rc;
-
 		let fields = fields.iter()
-			.map(|(fname, ftype)| self.1.new_id(Rc::clone(fname), ftype.clone(), 0..0))
+			.map(|(fname, ftype)| self.1.new_id(fname, ftype.clone(), 0..0))
 			.collect();
-		self.1.new_rec(name.into(), fields, 0..0)
+		self.1.new_rec(&name.into(), fields, 0..0)
 	}
 
 	fn if_s(

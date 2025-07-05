@@ -39,7 +39,7 @@ impl NodeStore {
 
 	pub(crate) fn new_id(
 		&mut self,
-		s: Rc<str>,
+		s: &Rc<str>,
 		kind: ValueType,
 		info: TokenInfo,
 	) -> NodeId {
@@ -57,33 +57,36 @@ impl NodeStore {
 
 	pub(crate) fn new_rec(
 		&mut self,
-		name: Rc<str>,
+		name: &Rc<str>,
 		fields: Vec<NodeId>,
 		info: TokenInfo,
 	) -> NodeId {
-		let udt = Rc::clone(&name);
+		let udt = Rc::clone(name);
+		let name = Rc::clone(name);
 		self.add(Node::new(Expr::Rec { name, fields }, ValueType::Udt(udt), info))
 	}
 
 	pub(crate) fn new_fun(
 		&mut self,
-		name: Rc<str>,
+		name: &Rc<str>,
 		params: Vec<NodeId>,
 		rtype: ValueType,
 		body: NodeId,
 		info: TokenInfo,
 	) -> NodeId {
+		let name = Rc::clone(name);
 		let kind = rtype.clone();
 		self.add(Node::new(Expr::Fun { name, params, rtype, body }, kind, info))
 	}
 
 	pub(crate) fn new_var(
 		&mut self,
-		name: Rc<str>,
+		name: &Rc<str>,
 		vtype: ValueType,
 		body: Option<NodeId>,
 		info: TokenInfo,
 	) -> NodeId {
+		let name = Rc::clone(name);
 		self.add(Node::new(Expr::Var { name, body }, vtype, info))
 	}
 
@@ -116,11 +119,12 @@ impl NodeStore {
 
 	pub(crate) fn new_rec_init(
 		&mut self,
-		name: Rc<str>,
+		name: &Rc<str>,
 		field_inits: Vec<(Rc<str>, NodeId)>,
 		info: TokenInfo,
 	) -> NodeId {
-		let udt = Rc::clone(&name);
+		let udt = Rc::clone(name);
+		let name = Rc::clone(name);
 		self.add(Node::new(Expr::RecInit { name, field_inits }, ValueType::Udt(udt), info))
 	}
 
@@ -149,10 +153,11 @@ impl NodeStore {
 
 	pub(crate) fn new_call(
 		&mut self,
-		name: Rc<str>,
+		name: &Rc<str>,
 		args: Vec<NodeId>,
 		info: TokenInfo,
 	) -> NodeId {
+		let name = Rc::clone(name);
 		self.add(Node::new(Expr::FnCall { name, args }, ValueType::Any, info))
 	}
 

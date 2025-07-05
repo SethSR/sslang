@@ -396,7 +396,7 @@ impl Parser<'_,'_> {
 				&format!("Call to unknown function '{name}'"),
 			));
 		}
-		Ok(self.nodes.new_call(name, args, lhs_node.info.start..op_token.range().end))
+		Ok(self.nodes.new_call(&name, args, lhs_node.info.start..op_token.range().end))
 	}
 
 	pub(super) fn expr(&mut self, min_bp: u8) -> miette::Result<NodeId> {
@@ -427,13 +427,13 @@ impl Parser<'_,'_> {
 				if self.peek(1).tt == TT::OBrace && self.peek(3).tt == TT::Colon {
 					self.expr_rec_init()?
 				} else {
+					let s = Rc::clone(s);
 					self.index += 1;
-					if let Some(nx) = self.scopes.find(s) {
+					if let Some(nx) = self.scopes.find(&s) {
 						nx
 					} else {
-						let nx = self.nodes.new_id(Rc::clone(s), ValueType::Any, left_token.range());
-						self.scopes.insert(s, nx);
-						nx
+						let nx = self.nodes.new_id(&s, ValueType::Any, left_token.range());
+						self.scopes.insert(&s, nx)
 					}
 				}
 			}
@@ -557,7 +557,7 @@ impl Parser<'_,'_> {
 		self.match_token(TokenType::CBrace)?;
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
-		Ok(self.nodes.new_rec_init(id, fields, start..end))
+		Ok(self.nodes.new_rec_init(&id, fields, start..end))
 	}
 
 	/// params := ( typed_ident (',' typed_ident)* ','? )?
@@ -617,7 +617,7 @@ impl Parser<'_,'_> {
 		self.match_token(TokenType::OBrace)?;
 		let fields = self.params()
 			.into_iter()
-			.map(|(fname, ftype, finfo)| self.nodes.new_id(fname, ftype, finfo))
+			.map(|(fname, ftype, finfo)| self.nodes.new_id(&fname, ftype, finfo))
 			.collect();
 		self.match_token(TokenType::CBrace)?;
 		let end = self.peek(-1).range().end;
@@ -629,7 +629,7 @@ impl Parser<'_,'_> {
 		}
 		self.records.insert(Rc::clone(&name));
 
-		let nx = self.nodes.new_rec(Rc::clone(&name), fields, start..end);
+		let nx = self.nodes.new_rec(&name, fields, start..end);
 		self.scopes.insert(&name, nx);
 		Ok(nx)
 	}
@@ -652,7 +652,7 @@ impl Parser<'_,'_> {
 			self.scopes.push();
 			let params = params.iter()
 				.map(|(pname, ptype, pinfo)| {
-					let px = self.nodes.new_var(Rc::clone(pname), ptype.clone(), None, pinfo.clone());
+					let px = self.nodes.new_var(pname, ptype.clone(), None, pinfo.clone());
 					self.scopes.insert(pname, px)
 				})
 				.collect();
@@ -671,7 +671,7 @@ impl Parser<'_,'_> {
 		}
 		self.functions.insert(Rc::clone(&name));
 
-		Ok(self.nodes.new_fun(Rc::clone(&name), params, rtype, body, start..end))
+		Ok(self.nodes.new_fun(&name, params, rtype, body, start..end))
 	}
 
 	/// var := 'var' ident (':' value_type)? '=' (block | expr)
@@ -704,7 +704,7 @@ impl Parser<'_,'_> {
 		{
 			Ok(body)
 		} else {
-			Ok(self.nodes.new_var(name, vtype, Some(body), start..end))
+			Ok(self.nodes.new_var(&name, vtype, Some(body), start..end))
 		}
 	}
 

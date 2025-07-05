@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TokenType {
-	EOF,
+	Eof,
 
 	// Literals
 	Ident(Rc<str>),   // [a-zA-Z_][a-zA-Z0-9_]*
@@ -88,7 +88,7 @@ impl Token {
 		use TokenType as TT;
 
 		let end = match &self.tt {
-			TT::EOF => 0,
+			TT::Eof => 0,
 
 			TT::Amp1 | TT::At | TT::Bang | TT::Bar1 |
 			TT::Carrot1 | TT::CBrace | TT::CParen | TT::Colon | TT::Comma |

@@ -68,6 +68,7 @@ impl Meet for Signed {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Int {
+	#[allow(dead_code)]
 	Top,
 	Unsigned(Unsigned),
 	Signed(Signed),
@@ -96,8 +97,8 @@ impl Meet for Int {
 
 			(Self::Signed(a), Self::Signed(b)) => Self::Signed(a.meet(b)),
 
-			(Self::Top, rhs) => rhs.clone(),
-			(lhs, Self::Top) => lhs.clone(),
+			(Self::Top, rhs) => *rhs,
+			(lhs, Self::Top) => *lhs,
 		}
 	}
 }
@@ -106,6 +107,7 @@ impl Meet for Int {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Fix {
+	#[allow(dead_code)]
 	Top,
 	F16(u8), // 16-bit fixed point with <u8> integer bits
 	F32(u8), // 32-bit fixed point with <u8> integer bits
@@ -150,8 +152,8 @@ impl Meet for Fix {
 				Self::Bot
 			}
 
-			(Self::Top, rhs) => rhs.clone(),
-			(lhs, Self::Top) => lhs.clone(),
+			(Self::Top, rhs) => *rhs,
+			(lhs, Self::Top) => *lhs,
 		}
 	}
 }
@@ -172,7 +174,7 @@ pub(crate) enum ValueType {
 	/// All User Defined Types
 	///
 	/// UDTs are stored in a type-cache in parser::Parser.
-	UDT(Rc<str>),
+	Udt(Rc<str>),
 	/// Bottom type
 	Unit,
 }
@@ -219,31 +221,31 @@ impl Meet for ValueType {
 			(Self::Bool, Self::Bool) => Self::Bool,
 			(Self::Bool, Self::Int(_)) => Self::Unit,
 			(Self::Bool, Self::Fix(_)) => Self::Unit,
-			(Self::Bool, Self::UDT(_)) => Self::Unit,
+			(Self::Bool, Self::Udt(_)) => Self::Unit,
 			(Self::Bool, Self::Any) => Self::Bool,
 
 			(Self::Int(_), Self::Bool) => Self::Unit,
 			(Self::Int(a), Self::Int(b)) => Self::Int(a.meet(b)),
 			(Self::Int(_), Self::Fix(_)) => Self::Unit,
-			(Self::Int(_), Self::UDT(_)) => Self::Unit,
+			(Self::Int(_), Self::Udt(_)) => Self::Unit,
 			(Self::Int(int), Self::Any) => Self::Int(*int),
 
 			(Self::Fix(_), Self::Bool) => Self::Unit,
 			(Self::Fix(_), Self::Int(_)) => Self::Unit,
 			(Self::Fix(a), Self::Fix(b)) => Self::Fix(a.meet(b)),
-			(Self::Fix(_), Self::UDT(_)) => Self::Unit,
+			(Self::Fix(_), Self::Udt(_)) => Self::Unit,
 			(Self::Fix(fix), Self::Any) => Self::Fix(*fix),
 
-			(Self::UDT(_), Self::Bool) => Self::Unit,
-			(Self::UDT(_), Self::Int(_)) => Self::Unit,
-			(Self::UDT(_), Self::Fix(_)) => Self::Unit,
-			(Self::UDT(_), Self::UDT(_)) => Self::Unit,
-			(Self::UDT(udt), Self::Any) => Self::UDT(udt.clone()),
+			(Self::Udt(_), Self::Bool) => Self::Unit,
+			(Self::Udt(_), Self::Int(_)) => Self::Unit,
+			(Self::Udt(_), Self::Fix(_)) => Self::Unit,
+			(Self::Udt(_), Self::Udt(_)) => Self::Unit,
+			(Self::Udt(udt), Self::Any) => Self::Udt(udt.clone()),
 
 			(Self::Any, Self::Bool) => Self::Unit,
 			(Self::Any, Self::Int(_)) => Self::Unit,
 			(Self::Any, Self::Fix(_)) => Self::Unit,
-			(Self::Any, Self::UDT(_)) => Self::Unit,
+			(Self::Any, Self::Udt(_)) => Self::Unit,
 			(Self::Any, Self::Any) => Self::Any,
 		}
 	}
@@ -257,7 +259,7 @@ impl fmt::Display for ValueType {
 			VT::Bool => write!(fmt, "bool"),
 			VT::Int(int) => write!(fmt, "{int}"),
 			VT::Fix(fix) => write!(fmt, "{fix}"),
-			VT::UDT(s) => write!(fmt, "{s}"),
+			VT::Udt(s) => write!(fmt, "{s}"),
 			VT::Unit => write!(fmt, "()"),
 			VT::Any => write!(fmt, "??"),
 		}

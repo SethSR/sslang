@@ -150,9 +150,9 @@ impl<'a> Iterator for Lexer<'a> {
 					loop {
 						if let Some((j,x)) = inner_chars.next() {
 							index = j;
-							if ('a'..='z').contains(&x)
-							|| ('A'..='Z').contains(&x)
-							|| ('0'..='9').contains(&x)
+							if x.is_ascii_lowercase()
+							|| x.is_ascii_uppercase()
+							|| x.is_ascii_digit()
 							|| x == '_' {
 								continue;
 							}
@@ -196,7 +196,7 @@ impl<'a> Iterator for Lexer<'a> {
 					loop {
 						if let Some((j,x)) = inner_chars.next() {
 							index = j;
-							if ('0'..='9').contains(&x) || x == '_' {
+							if x.is_ascii_digit() || x == '_' {
 								continue;
 							}
 							if x == '.' && !have_dot {
@@ -249,7 +249,7 @@ pub(crate) fn eval(
 	use std::iter::once;
 
 	Lexer::new(input)
-		.chain(once(Ok(Token::new(TokenType::EOF, input.len()))))
+		.chain(once(Ok(Token::new(TokenType::Eof, input.len()))))
 		.collect()
 }
 
@@ -265,7 +265,7 @@ mod tokenizes {
 
 		let tokens = crate::lexer::eval(input)?;
 		assert_eq!(tokens, check.iter()
-			.chain(once(&TokenType::EOF))
+			.chain(once(&TokenType::Eof))
 			.collect::<Vec<&TokenType>>());
 		Ok(())
 	}

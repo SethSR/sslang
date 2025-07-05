@@ -1,47 +1,49 @@
 
+use std::collections::HashSet;
+use std::rc::Rc;
+
 use crate::parser::{
 	BinaryOp,
 	Expr,
-	FuncStore,
 	Int,
 	Node,
 	NodeId,
 	NodeStore,
-	RecStore,
+	Scope,
 	UnaryOp,
 	ValueType,
 };
 
 pub(crate) fn eval(mut data: crate::parser::Output) -> crate::parser::Output {
-	update_types(data.start, &data.records, &data.functions, &mut data.store);
+	update_types(data.start, &data.records, &data.functions, &data.scopes, &mut data.store);
 	data
 }
 
 fn update_types(
 	nx: NodeId,
-	r_store: &RecStore,
-	f_store: &FuncStore,
+	r_store: &HashSet<Rc<str>>,
+	f_store: &HashSet<Rc<str>>,
+	scopes: &Vec<Scope>,
 	n_store: &mut NodeStore,
 ) {
 	let Node { kind, expr, ..} = n_store.get(nx)
 		.cloned()
 		.expect("missing node in node_store");
 
-	println!("[{nx:3}] ({kind}): {expr}");
+	println!("[{nx:>3}] ({kind}): {expr}");
 
 	match expr {
-		Expr::Num(_) => return,
-		Expr::Id(_) => return,
-		Expr::Bool(_) => return,
+		Expr::Num(_) | Expr::Id(_) | Expr::Bool(_) => {}
+
 		Expr::Phi { lhs, rhs } => {
-			update_types(lhs, r_store, f_store, n_store);
-			update_types(rhs, r_store, f_store, n_store);
+			update_types(lhs, r_store, f_store, scopes, n_store);
+			update_types(rhs, r_store, f_store, scopes, n_store);
 			let lkind = n_store.get(lhs)
 				.map(|n| n.kind.clone())
-				.expect("missing lnode in node_store");
+				.expect("missing left-node-kind in node_store");
 			let rkind = n_store.get(rhs)
 				.map(|n| n.kind.clone())
-				.expect("missing rnode in node_store");
+				.expect("missing right-node-kind in node_store");
 			if lkind != rkind {
 				eprintln!("- phi branches no longer match: Left {lkind}, Right {rkind}");
 			}
@@ -49,38 +51,43 @@ fn update_types(
 
 		Expr::Block { body } => {
 			for bx in body {
-				update_types(bx, r_store, f_store, n_store);
+				update_types(bx, r_store, f_store, scopes, n_store);
 			}
 		}
 
 		Expr::While { cond, body } => {
-			update_types(cond, r_store, f_store, n_store);
-			update_types(body, r_store, f_store, n_store);
+			update_types(cond, r_store, f_store, scopes, n_store);
+			update_types(body, r_store, f_store, scopes, n_store);
 		}
 
 		Expr::RecInit { name, field_inits, ..} => {
-			let Some(rec) = r_store.get(&name) else {
+			if !r_store.contains(&name) {
 				eprintln!("- unknown Record type '{name}'");
 				return;
 			};
 
 			for (f_name, fnx) in field_inits {
-				update_types(fnx, r_store, f_store, n_store);
-				let fkind = n_store.get_mut(fnx)
-					.map(|n| &mut n.kind)
-					.expect("missing fnode in node_store");
+				update_types(fnx, r_store, f_store, scopes, n_store);
 
-				let Some(expected_kind) = rec.get(&f_name) else {
-					eprintln!("- unknown Field '{f_name}' in Record Initializer");
+				let fx = scopes[0].get(&f_name)
+					.unwrap_or_else(|| panic!("- missing '{f_name}' in scopes[0]"));
+				let rec = n_store.get(*fx).cloned()
+					.unwrap_or_else(|_| panic!("- missing index {fx} in node_store"));
+				let Expr::Rec {..} = rec.expr else {
+					eprintln!("- expected a Record for '{f_name}' identifier, found {rec:?}");
 					return;
 				};
 
+				let fkind = n_store.get_mut(fnx)
+					.map(|n| &mut n.kind)
+					.unwrap_or_else(|_| panic!("missing field-kind for '{f_name}' in node_store"));
+
 				if *fkind == ValueType::Any {
-					*fkind = expected_kind.clone();
+					*fkind = rec.kind.clone();
 				}
 
-				if *fkind != *expected_kind {
-					eprintln!("- '{f_name}' in Record Initializer has the wrong type. Expected {expected_kind}, found {fkind}");
+				if *fkind != rec.kind {
+					eprintln!("- '{f_name}' in Record Initializer has the wrong type. Expected {}, found {fkind}", rec.kind);
 					return;
 				}
 			}
@@ -89,26 +96,25 @@ fn update_types(
 		// TODO - srenshaw - Add initializers to Variable declarations.
 		Expr::Var { name: _, body } => {
 			// TODO - srenshaw - Ensure initializer and declaration match.
-			update_types(body, r_store, f_store, n_store);
+			update_types(body, r_store, f_store, scopes, n_store);
 		}
 
 		Expr::If { cond, bt, bf } => {
-			update_types(cond, r_store, f_store, n_store);
+			update_types(cond, r_store, f_store, scopes, n_store);
 
-			update_types(bt, r_store, f_store, n_store);
+			update_types(bt, r_store, f_store, scopes, n_store);
 			let tkind = n_store.get(bt)
 				.map(|n| n.kind.clone())
-				.expect("missing tnode in node_store");
+				.expect("missing true-kind in node_store");
 
 			if let Some(bf) = bf {
-				update_types(bf, r_store, f_store, n_store);
+				update_types(bf, r_store, f_store, scopes, n_store);
 				let fkind = n_store.get(bf)
 					.map(|n| n.kind.clone())
-					.expect("missing fnode in node_store");
+					.expect("missing false-kind in node_store");
 
 				if tkind != fkind {
-					eprintln!("- if branches have differing types: {tkind} != {fkind}");
-					return;
+					eprintln!("- IF branches have different types: {tkind} != {fkind}");
 				}
 			} else if tkind != ValueType::Unit {
 				eprintln!("- missing else-branch, then-branch returns type {tkind}");
@@ -117,26 +123,41 @@ fn update_types(
 		}
 
 		Expr::FnCall { name, args } => {
-			let Some((params, rtype)) = f_store.get(&name) else {
+			if !f_store.contains(&name) {
 				eprintln!("- unknown Record type '{name}'");
+				return;
+			}
+
+			let cx = scopes[0].get(&name)
+				.unwrap_or_else(|| panic!("- missing '{name}' in scopes[0]"));
+			let call = n_store.get(*cx).cloned()
+				.unwrap_or_else(|_| panic!("- missing index {cx} in node_store"));
+			let Expr::Fun { params, rtype, ..} = &call.expr else {
 				return;
 			};
 
 			for (idx, anx) in args.into_iter().enumerate() {
-				update_types(anx, r_store, f_store, n_store);
+				update_types(anx, r_store, f_store, scopes, n_store);
 				let akind = n_store.get(anx)
 					.map(|n| n.kind.clone())
-					.expect("missing anode in node_store");
+					.expect("missing arg-kind in node_store");
 
 				if idx >= params.len() {
 					eprintln!("- extra argument to call. Found argument at index {idx}, but there are only {} parameters.", params.len());
 					return;
 				}
 
-				let (pname, expected_kind) = &params[idx];
+				let px = params[idx];
+				let param = n_store.get(px)
+					.unwrap_or_else(|_| panic!("- missing index {px} in node_store"));
+				let Expr::Id(pname) = &param.expr else {
+					return;
+				};
 
-				if akind != *expected_kind {
-					eprintln!("- '{pname}' in Function Call has the wrong type. Expected {expected_kind}, found {akind}");
+				if akind != param.kind {
+					eprintln!("- '{pname}' in Function Call has the wrong type. Expected {}, found {akind}",
+						param.kind,
+					);
 					return;
 				}
 			}
@@ -149,11 +170,13 @@ fn update_types(
 		}
 
 		Expr::Rec { name, fields } => {
-			assert!(r_store.contains_key(&name), "Compiler Error: Found unknown Record Definition");
+			assert!(r_store.contains(&name), "Compiler Error: Found unknown Record Definition");
 
-			for (_, fkind) in fields {
-				if let ValueType::UDT(fudt) = fkind {
-					if !r_store.contains_key(&fudt) {
+			for fx in fields {
+				let field = n_store.get(fx)
+					.unwrap_or_else(|_| panic!("- missing index {fx} in node_store"));
+				if let ValueType::Udt(fudt) = &field.kind {
+					if !r_store.contains(fudt) {
 						eprintln!("- unknown type '{fudt}' in Record Definition");
 					}
 				}
@@ -161,20 +184,22 @@ fn update_types(
 		}
 
 		Expr::Fun { name, params, rtype, body } => {
-			assert!(f_store.contains_key(&name), "Compiler Error: Found unknown Function Definition");
+			assert!(f_store.contains(&name), "Compiler Error: Found unknown Function Definition");
 
-			for (_, pkind) in params {
-				if let ValueType::UDT(pudt) = pkind {
-					if !r_store.contains_key(&pudt) {
+			for px in params {
+				let param = n_store.get(px)
+					.unwrap_or_else(|_| panic!("- missing index {px} in node_store"));
+				if let ValueType::Udt(pudt) = &param.kind {
+					if !r_store.contains(pudt) {
 						eprintln!("- unknown type '{pudt}' in Function Definition");
 					}
 				}
 			}
 
-			update_types(body, r_store, f_store, n_store);
+			update_types(body, r_store, f_store, scopes, n_store);
 			let bkind = n_store.get(body)
 				.map(|n| n.kind.clone())
-				.expect("missing bnode in node_store");
+				.expect("missing body-kind in node_store");
 
 			if rtype != bkind {
 				eprintln!("- function body returns the wrong type: Expected {rtype}, found {bkind}");
@@ -182,10 +207,10 @@ fn update_types(
 		}
 
 		Expr::Unary { op, rhs } => {
-			update_types(rhs, r_store, f_store, n_store);
+			update_types(rhs, r_store, f_store, scopes, n_store);
 			let Node { kind: rkind, ..} = n_store.get(rhs)
 				.cloned()
-				.expect("missing rnode in node_store");
+				.expect("missing right-node-kind in node_store");
 
 			match op {
 				// TODO - srenshaw - This should only be applicable to 'pointer' types.
@@ -227,15 +252,15 @@ fn update_types(
 		}
 
 		Expr::Binary { op, lhs, rhs } => {
-			update_types(lhs, r_store, f_store, n_store);
+			update_types(lhs, r_store, f_store, scopes, n_store);
 			let Node { kind: lkind, expr: lexpr, ..} = n_store.get(lhs)
 				.cloned()
-				.expect("missing lnode in node_store");
+				.expect("missing left-node-kind in node_store");
 
-			update_types(rhs, r_store, f_store, n_store);
+			update_types(rhs, r_store, f_store, scopes, n_store);
 			let Node { kind: rkind, expr: rexpr, ..} = n_store.get(rhs)
 				.cloned()
-				.expect("missing rnode in node_store");
+				.expect("missing right-node-kind in node_store");
 
 			match op {
 				BinaryOp::Add => {
@@ -258,7 +283,7 @@ fn update_types(
 								return;
 							};
 							
-							if !rec.contains_key(&rname) {
+							if !rec.contains(&*rname) {
 								eprintln!("- Record type '{lname}' has no field named '{rname}'");
 							}
 						}

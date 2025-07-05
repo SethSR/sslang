@@ -8,7 +8,7 @@ mod lexer;
 mod parser;
 mod reducer;
 
-const TEST_INPUT: &'static str = "
+const TEST_INPUT: &str = "
 rec vec {
 	x:fd,
 	y:fd,
@@ -103,7 +103,7 @@ fn main() -> miette::Result<()> {
 	let source = TEST_INPUT;
 
 	info!("lexing");
-	let tokens = lexer::eval(&source)?;
+	let tokens = lexer::eval(source)?;
 	if options.debug.contains(&Stage::Lexer) {
 		let token_str = tokens.iter()
 			.map(|t| t.to_string())
@@ -113,7 +113,7 @@ fn main() -> miette::Result<()> {
 	}
 
 	info!("parsing");
-	let out = parser::eval(&source, tokens)?;
+	let out = parser::eval(source, tokens)?;
 	if options.debug.contains(&Stage::Parser) {
 		debug!("Parser Output: {out:?}");
 	}

@@ -1,13 +1,10 @@
 
-use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
-use super::{BinaryOp, Meet, TokenInfo, TypedIdent, UnaryOp, ValueType};
+use super::{BinaryOp, Meet, TokenInfo, UnaryOp, ValueType};
 
 pub(crate) type NodeId = usize;
-
-pub(crate) type Scope = HashMap<Rc<str>, NodeId>;
 
 #[derive(Debug, Default)]
 pub(crate) struct NodeStore {
@@ -35,7 +32,7 @@ impl NodeStore {
 		kind: ValueType,
 		info: TokenInfo,
 	) -> NodeId {
-		self.add(Node::new(Expr::Id(s.into()), kind, info))
+		self.add(Node::new(Expr::Id(s), kind, info))
 	}
 
 	pub(crate) fn new_num(
@@ -50,17 +47,17 @@ impl NodeStore {
 	pub(crate) fn new_rec(
 		&mut self,
 		name: Rc<str>,
-		fields: Vec<TypedIdent>,
+		fields: Vec<NodeId>,
 		info: TokenInfo,
 	) -> NodeId {
 		let udt = Rc::clone(&name);
-		self.add(Node::new(Expr::Rec { name, fields }, ValueType::UDT(udt), info))
+		self.add(Node::new(Expr::Rec { name, fields }, ValueType::Udt(udt), info))
 	}
 
 	pub(crate) fn new_fun(
 		&mut self,
 		name: Rc<str>,
-		params: Vec<TypedIdent>,
+		params: Vec<NodeId>,
 		rtype: ValueType,
 		body: NodeId,
 		info: TokenInfo,
@@ -115,7 +112,7 @@ impl NodeStore {
 		info: TokenInfo,
 	) -> NodeId {
 		let udt = Rc::clone(&name);
-		self.add(Node::new(Expr::RecInit { name, field_inits }, ValueType::UDT(udt), info))
+		self.add(Node::new(Expr::RecInit { name, field_inits }, ValueType::Udt(udt), info))
 	}
 
 	pub(crate) fn new_unary(
@@ -223,11 +220,11 @@ pub(crate) enum Expr {
 	},
 	Rec {
 		name: Rc<str>,
-		fields: Vec<TypedIdent>,
+		fields: Vec<NodeId>,
 	},
 	Fun {
 		name: Rc<str>,
-		params: Vec<TypedIdent>,
+		params: Vec<NodeId>,
 		rtype: ValueType,
 		body: NodeId,
 	},
@@ -271,7 +268,7 @@ impl fmt::Display for Expr {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
 		fn join<T>(a: &[T], b: fn(&T) -> String) -> String {
 			a.iter()
-				.map(|n| b(n))
+				.map(b)
 				.collect::<Vec<_>>()
 				.join(", ")
 		}
@@ -286,22 +283,22 @@ impl fmt::Display for Expr {
 			Expr::Phi { lhs, rhs }        => write!(fmt, "(phi {lhs} {rhs})"),
 
 			Expr::Block { body } => write!(fmt, "[{}]",
-				join(&body, |n| n.to_string()),
+				join(body, |n| n.to_string()),
 			),
 			Expr::While { cond, body } => write!(fmt, "(while {cond} {body})"),
 			Expr::RecInit { name, field_inits } => write!(fmt, "(init {name} [{}])",
-				join(&field_inits, |(a,b)| format!("{a}: {b}")),
+				join(field_inits, |(a,b)| format!("{a}: {b}")),
 			),
 			Expr::FnCall { name, args } => write!(fmt, "(call {name} [{}])",
-				join(&args, |n| n.to_string()),
+				join(args, |n| n.to_string()),
 			),
 			Expr::Rec { name, fields } => write!(fmt, "(rec {name} [{}])",
-				join(&fields, |(a,b)| format!("{a}: {b}")),
+				join(fields, |n| n.to_string()),
 			),
 			Expr::If { cond, bt, bf: Some(bf) } => write!(fmt, "(if {cond} {bt} {bf})"),
 			Expr::If { cond, bt, bf: None } => write!(fmt, "(if {cond} {bt} ())"),
 			Expr::Fun { name, params, rtype, body } => write!(fmt, "(fn {name} [{}] -> {rtype} {body})",
-				join(&params, |(a,b)| format!("{a}: {b}")),
+				join(params, |n| n.to_string()),
 			),
 		}
 	}

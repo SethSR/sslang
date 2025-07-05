@@ -1,5 +1,5 @@
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use miette::{LabeledSpan, IntoDiagnostic, WrapErr};
@@ -13,7 +13,6 @@ use super::{
 	Expr,
 	Fix,
 	Int,
-	TypedIdent,
 	ValueType,
 };
 
@@ -50,9 +49,7 @@ macro_rules! error {
 	}
 }
 
-pub(crate) type RecStore = HashMap<Rc<str>, HashMap<Rc<str>, ValueType>>;
-pub(crate) type FuncStore = HashMap<Rc<str>, (Vec<(Rc<str>, ValueType)>, ValueType)>;
-type Scope = HashMap<Rc<str>, NodeId>;
+pub(crate) type Scope = HashMap<Rc<str>, NodeId>;
 
 #[derive(Debug)]
 pub(super) struct Parser<'a,'b> {
@@ -61,12 +58,12 @@ pub(super) struct Parser<'a,'b> {
 	index: usize,
 
 	scope_index: usize,
-	scopes: Vec<Scope>,
+	pub(super) scopes: Vec<Scope>,
 
 	// TODO - srenshaw - All of these fields will probably be moved into a Scope structure.
 	pub(super) nodes: NodeStore,
-	pub(super) records: RecStore,
-	pub(super) functions: FuncStore,
+	pub(super) records: HashSet<Rc<str>>,
+	pub(super) functions: HashSet<Rc<str>>,
 
 	// DEBUG
 	dbg_depth: usize,
@@ -76,15 +73,15 @@ impl<'a,'b> Parser<'a,'b> {
 	pub fn new(source: &'b str, input: &'a [Token]) -> Self {
 		Self {
 			source,
-			input: &input,
+			input,
 			index: 0,
 
 			scope_index: 0,
 			scopes: Vec::default(),
 
 			nodes: NodeStore::default(),
-			records: RecStore::default(),
-			functions: FuncStore::default(),
+			records: HashSet::default(),
+			functions: HashSet::default(),
 
 			dbg_depth: 2,
 		}
@@ -95,14 +92,12 @@ impl<'a,'b> Parser<'a,'b> {
 	}
 
 	/// program := expr*
-	pub fn program(
-		&mut self,
-	) -> miette::Result<NodeId> {
+	pub fn program(&mut self) -> miette::Result<NodeId> {
 		let mut program = Vec::default();
 		self.scope_push();
-		while self.peek(0).tt != TokenType::EOF {
+		while self.peek(0).tt != TokenType::Eof {
 			let nx = self.expr(0)?;
-			let node = self.nodes.get(nx).unwrap();
+			let node = self.nodes.get(nx)?;
 			match &node.expr {
 				Expr::Var { name, ..} |
 				Expr::Fun { name, ..} => {
@@ -114,7 +109,6 @@ impl<'a,'b> Parser<'a,'b> {
 		}
 		self.scope_pop();
 		let nx = self.nodes.new_block(program, 0..self.source.len());
-		println!("{:#?}", self.scopes);
 		Ok(nx)
 	}
 }
@@ -183,7 +177,7 @@ fn infix_binding_power(tt: &TokenType) -> Option<(u8,u8)> {
 		// Syntax & Punctuation
 		TT::Colon | TT::Comma | TT::CBrace | TT::CParen | TT::OBrace | TT::RetArrow |
 		// End-of-file
-		TT::EOF => None,
+		TT::Eof => None,
 	}
 }
 
@@ -226,7 +220,7 @@ impl Parser<'_,'_> {
 					.into_diagnostic()
 					.wrap_err("lexer should not allow invalid fixed-point values")?))
 			}
-			TokenType::EOF => error!(eof, self, "Number"),
+			TokenType::Eof => error!(eof, self, "Number"),
 			_ => error!(self, "Number"),
 		};
 		self.dbg_depth -= 2;
@@ -242,7 +236,7 @@ impl Parser<'_,'_> {
 				self.index += 1;
 				Ok(s)
 			}
-			TokenType::EOF => error!(eof, self, "Identifier"),
+			TokenType::Eof => error!(eof, self, "Identifier"),
 			_ => error!(self, "Identifier"),
 		};
 		self.dbg_depth -= 2;
@@ -293,7 +287,7 @@ impl Parser<'_,'_> {
 			TokenType::S32 => Ok(ValueType::to_s32()),
 			TokenType::F16(_) => self.parse_fixed_point("fw", 16).map(ValueType::to_f16),
 			TokenType::F32(_) => self.parse_fixed_point("fd", 32).map(ValueType::to_f32),
-			TokenType::Ident(ref s) => Ok(ValueType::UDT(Rc::clone(s))),
+			TokenType::Ident(ref s) => Ok(ValueType::Udt(Rc::clone(s))),
 			_ => error!(token.tt, self, "Value Type"),
 		};
 		self.index += 1;
@@ -304,21 +298,28 @@ impl Parser<'_,'_> {
 
 	pub(super) fn match_token(&mut self, tt: TokenType) -> miette::Result<()> {
 		match self.peek(0).tt.clone() {
-			t if t != tt => if t == TokenType::EOF {
+			t if t != tt => if t == TokenType::Eof {
 				error!(eof, self, tt)
 			} else {
 				error!(self, tt)
 			}
-			_ => Ok(self.index += 1),
+			_ => {
+				self.index += 1;
+				Ok(())
+			}
 		}
 	}
 
-	pub(super) fn ident_typed(&mut self) -> miette::Result<TypedIdent> {
+	pub(super) fn ident_typed(&mut self) -> miette::Result<(Rc<str>, NodeId)> {
 		log("TypedIdent", self.dbg_depth);
 		self.dbg_depth += 2;
+		let start = self.peek(0).range().start;
 		let result = self.ident()
 			.and_then(|id| self.match_token(TokenType::Colon).map(|_| id))
-			.and_then(|id| self.value_type().map(|vt| (id, vt)));
+			.and_then(|id| self.value_type().map(|vt| {
+				let end = self.peek(-1).range().end;
+				(Rc::clone(&id), self.nodes.new_id(id, vt, start..end))
+			}));
 		self.dbg_depth -= 2;
 		result
 	}
@@ -330,9 +331,8 @@ impl Parser<'_,'_> {
 		let first = self.expr(0)
 			.ok()?;
 		let mut out = vec![first];
-		while let Some(next) = self.match_token(TokenType::Comma)
+		while let Ok(next) = self.match_token(TokenType::Comma)
 			.and_then(|_| self.expr(0))
-			.ok()
 		{
 			out.push(next);
 		}
@@ -343,7 +343,7 @@ impl Parser<'_,'_> {
 
 	/// if := 'if' expr block ('else' block)?
 	pub(super) fn stmt_if(&mut self) -> miette::Result<NodeId> {
-		debug!("{:1$}If", "", self.dbg_depth);
+		log("If", self.dbg_depth);
 		self.dbg_depth += 2;
 		let start = self.peek(0).range().start;
 		self.match_token(TokenType::If)?;
@@ -397,12 +397,16 @@ impl Parser<'_,'_> {
 
 			TT::Ident(ref s) => {
 				// HACK - srenshaw - We probably need a more robust way to distinguish between Record
-				// initialization, "ident -> block" sequences, and assignement.
+				// initialization, "ident -> block" sequences, and assignment.
 				if self.peek(1).tt == TT::OBrace && self.peek(3).tt == TT::Colon {
 					self.expr_rec_init()?
 				} else {
 					self.index += 1;
-					self.nodes.new_id(Rc::clone(s), ValueType::Any, left_token.range())
+					if let Some(nx) = self.scope_find(s) {
+						nx
+					} else {
+						self.nodes.new_id(Rc::clone(s), ValueType::Any, left_token.range())
+					}
 				}
 			}
 
@@ -440,7 +444,7 @@ impl Parser<'_,'_> {
 					.map_err(|err| err.with_source_code(self.source.to_string()))?
 			}
 
-			TT::EOF => return error!(eof, self,
+			TT::Eof => return error!(eof, self,
 				"Identifier, Function Call, or Literal"),
 
 			_ => return error!(self,
@@ -458,14 +462,17 @@ impl Parser<'_,'_> {
 				TT::F16(_) | TT::F32(_) |
 				TT::OBrace |
 				TT::Colon | TT::CBrace | TT::CParen |
-				TT::EOF) {
+				TT::Eof) {
 				break;
 			}
 
 			if TT::OParen == op_token.tt {
 				let lhs_node = self.nodes.get(lhs)?.clone();
-				let Expr::Id(name) = lhs_node.expr else {
-					return error!(self, "Identifier");
+				eprintln!("{lhs_node}");
+				let name = match lhs_node.expr {
+					Expr::Id(name) => name,
+					Expr::Fun { name, ..} => name,
+					_ => return error!(self, "Identifier"),
 				};
 
 				self.index += 1;
@@ -549,7 +556,7 @@ impl Parser<'_,'_> {
 	}
 
 	/// params := ( typed_ident (',' typed_ident)* ','? )?
-	pub(super) fn params(&mut self) -> Vec<TypedIdent> {
+	pub(super) fn params(&mut self) -> Vec<(Rc<str>, NodeId)> {
 		log("Params", self.dbg_depth);
 		self.dbg_depth += 2;
 
@@ -603,12 +610,12 @@ impl Parser<'_,'_> {
 		self.match_token(TokenType::Rec)?;
 		let name = self.ident()?;
 		self.match_token(TokenType::OBrace)?;
-		let fields = self.params();
+		let fields = self.params().into_iter().map(|(_,nx)| nx).collect();
 		self.match_token(TokenType::CBrace)?;
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
 
-		if self.records.contains_key(&name) {
+		if self.records.contains(&name) {
 			return Err(miette::miette! {
 				labels = vec![
 					LabeledSpan::at(start..end, "here"),
@@ -616,7 +623,7 @@ impl Parser<'_,'_> {
 				"A Record with this name is already defined."
 			});
 		}
-		self.records.insert(Rc::clone(&name), fields.iter().cloned().collect());
+		self.records.insert(Rc::clone(&name));
 
 		let nx = self.nodes.new_rec(Rc::clone(&name), fields, start..end);
 		self.scope_add(name, nx);
@@ -636,13 +643,18 @@ impl Parser<'_,'_> {
 		let rtype = self.match_token(TokenType::RetArrow)
 			.and_then(|_| self.value_type())
 			.unwrap_or(ValueType::Unit);
+
 		self.scope_push();
+		for (pname, px) in &params {
+			self.scope_add(Rc::clone(pname), *px);
+		}
 		let body = self.block()?;
 		self.scope_pop();
+
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
 
-		if self.functions.contains_key(&name) {
+		if self.functions.contains(&name) {
 			return Err(miette::miette! {
 				labels = vec![
 					LabeledSpan::at(start..end, "here"),
@@ -650,8 +662,9 @@ impl Parser<'_,'_> {
 				"A Function with this name is already defined."
 			});
 		}
-		self.functions.insert(Rc::clone(&name), (params.iter().cloned().collect(), rtype.clone()));
+		self.functions.insert(Rc::clone(&name));
 
+		let params = params.into_iter().map(|(_,nx)| nx).collect();
 		let nx = self.nodes.new_fun(Rc::clone(&name), params, rtype, body, start..end);
 		self.scope_add(name, nx);
 		Ok(nx)
@@ -716,6 +729,15 @@ impl Parser<'_,'_> {
 	fn scope_pop(&mut self) {
 		println!("popped a scope");
 		self.scope_index -= 1;
+	}
+
+	fn scope_find(&mut self, id: &Rc<str>) -> Option<NodeId> {
+		for scope in self.scopes.iter().rev() {
+			if let Some(&nx) = scope.get(id) {
+				return Some(nx);
+			}
+		}
+		None
 	}
 
 	fn scope_merge(

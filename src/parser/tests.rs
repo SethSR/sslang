@@ -63,8 +63,13 @@ impl Tester {
 		rtype: VT,
 		body: &[NodeId],
 	) -> NodeId {
+		use std::rc::Rc;
+
+		let params = params.iter()
+			.map(|(pname, ptype)| self.1.new_id(Rc::clone(pname), ptype.clone(), 0..0))
+			.collect();
 		let body = self.block(body);
-		self.1.new_fun(name.into(), params.to_vec(), rtype, body, 0..0)
+		self.1.new_fun(name.into(), params, rtype, body, 0..0)
 	}
 
 	fn rec(
@@ -72,7 +77,12 @@ impl Tester {
 		name: &str,
 		fields: &[TypedIdent],
 	) -> NodeId {
-		self.1.new_rec(name.into(), fields.to_vec(), 0..0)
+		use std::rc::Rc;
+
+		let fields = fields.iter()
+			.map(|(fname, ftype)| self.1.new_id(Rc::clone(fname), ftype.clone(), 0..0))
+			.collect();
+		self.1.new_rec(name.into(), fields, 0..0)
 	}
 
 	fn if_s(
@@ -359,7 +369,7 @@ fn fn_stmt_rtype_simple() -> miette::Result<()> {
 #[test]
 fn fn_stmt_rtype_udt() -> miette::Result<()> {
 	let mut t = Tester::default();
-	t.0 = t.fun("a", &[], VT::UDT("b".into()), &[]);
+	t.0 = t.fun("a", &[], VT::Udt("b".into()), &[]);
 	parse_test("fn a() -> b {}", &t.finish())
 }
 

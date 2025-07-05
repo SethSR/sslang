@@ -404,7 +404,7 @@ impl Parser<'_,'_> {
 		self.dbg_depth += 2;
 		use TokenType as TT;
 
-		let left_token = self.peek(0).clone();
+		let left_token = self.peek(0);
 		let mut lhs: NodeId = match left_token.tt {
 			TT::Rec => self.stmt_rec()?,
 			TT::Fun => self.stmt_fn()?,
@@ -413,12 +413,14 @@ impl Parser<'_,'_> {
 			TT::While => self.stmt_while()?,
 
 			TT::True => {
+				let token = left_token.clone();
 				self.index += 1;
-				self.nodes.new_bool(true, left_token.range())
+				self.nodes.new_bool(true, token.range())
 			}
 			TT::False => {
+				let token = left_token.clone();
 				self.index += 1;
-				self.nodes.new_bool(false, left_token.range())
+				self.nodes.new_bool(false, token.range())
 			}
 
 			TT::Ident(ref s) => {
@@ -427,25 +429,28 @@ impl Parser<'_,'_> {
 				if self.peek(1).tt == TT::OBrace && self.peek(3).tt == TT::Colon {
 					self.expr_rec_init()?
 				} else {
+					let token = left_token.clone();
 					let s = Rc::clone(s);
 					self.index += 1;
 					if let Some(nx) = self.scopes.find(&s) {
 						nx
 					} else {
-						let nx = self.nodes.new_id(&s, ValueType::Any, left_token.range());
+						let nx = self.nodes.new_id(&s, ValueType::Any, token.range());
 						self.scopes.insert(&s, nx)
 					}
 				}
 			}
 
 			TT::Integer(_) => {
+				let token = left_token.clone();
 				let num = self.num()?;
-				self.nodes.new_num(num, ValueType::Int(Int::Bot), left_token.range())
+				self.nodes.new_num(num, ValueType::Int(Int::Bot), token.range())
 			}
 
 			TT::Fixed(_) => {
+				let token = left_token.clone();
 				let num = self.num()?;
-				self.nodes.new_num(num, ValueType::Fix(Fix::Bot), left_token.range())
+				self.nodes.new_num(num, ValueType::Fix(Fix::Bot), token.range())
 			}
 
 			TT::OParen => {
@@ -466,9 +471,10 @@ impl Parser<'_,'_> {
 				let Some(r_bp) = prefix_binding_power(&self.peek(0).tt) else {
 					return Err(expected(self, "Unary Operator"));
 				};
+				let token = left_token.clone();
 				self.index += 1;
 				let rhs = self.expr(r_bp)?;
-				self.nodes.new_unary((&left_token.tt).try_into()?, rhs, left_token.range())
+				self.nodes.new_unary((&token.tt).try_into()?, rhs, token.range())
 					.map_err(|err| err.with_source_code(self.source.to_string()))?
 			}
 

@@ -1,5 +1,6 @@
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::rc::Rc;
 
 use miette::{LabeledSpan, IntoDiagnostic, WrapErr};
@@ -17,33 +18,103 @@ use super::{
 	ValueType,
 };
 
-fn report(source: &str, info: TokenInfo, marker: &str, msg: &str) -> miette::Report {
-	miette::miette! {
+#[derive(Debug)]
+pub(crate) enum Error {
+	Internal(Context),
+	Parse(miette::Report),
+}
+
+impl fmt::Display for Error {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match self {
+			Self::Internal(context) => {
+				writeln!(f, "Context:")?;
+				for frame in &context.call_stack {
+					writeln!(f, "  - {frame}")?;
+				}
+				if context.message.is_empty() {
+					write!(f, "")
+				} else {
+					write!(f, "{}", context.message)
+				}
+			}
+			Self::Parse(report) => write!(f, "{report:?}"),
+		}
+	}
+}
+
+impl std::error::Error for Error {}
+
+impl From<miette::Report> for Error {
+	fn from(report: miette::Report) -> Self {
+		Self::Parse(report)
+	}
+}
+
+impl miette::Diagnostic for Error {}
+
+fn report(source: &str, info: TokenInfo, marker: &str, msg: &str) -> Error {
+	Error::Parse(miette::miette! {
 		labels = [
 			LabeledSpan::at(info, marker),
 		],
 		"{msg}"
-	}.with_source_code(source.to_owned())
+	}.with_source_code(source.to_owned()))
 }
 
-fn error(source: &str, info: TokenInfo, msg: &str) -> miette::Report {
+fn error(source: &str, info: TokenInfo, msg: &str) -> Error {
 	report(source, info, "here", msg)
 }
 
-fn eof_error(parser: &Parser, msg: &str) -> miette::Report {
+fn eof_error(parser: &Parser, msg: &str) -> Error {
 	report(parser.source, parser.peek(-1).range(), "after here",
 		&format!("Expected {msg}, Found EoF"))
 }
 
-fn expected(parser: &Parser, msg: &str) -> miette::Report {
-	report(parser.source, parser.peek(0).range(), "here",
-		&format!("Expected {msg}, Found {:?}", parser.peek(0)))
+fn expected(parser: &Parser, msg: &str) -> Error {
+	Error::Parse(miette::miette! {
+		labels = [
+			LabeledSpan::at(parser.peek(-1).range(), "between here"),
+			LabeledSpan::at(parser.peek(0).range(), "and here"),
+		],
+		"Expected {msg}, found {}", parser.peek(0)
+	}.with_source_code(parser.source.to_owned()))
 }
 
 pub(crate) type Scope = HashMap<Rc<str>, NodeId>;
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ScopeTracker(Vec<Scope>);
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Context {
+	pub call_stack: Vec<&'static str>,
+	pub debug_log: Vec<String>,
+	message: String,
+}
+
+impl Context {
+	fn with_msg(&self, msg: &str) -> Error {
+		Error::Internal(Self {
+			call_stack: self.call_stack.clone(),
+			debug_log: self.debug_log.clone(),
+			message: msg.to_string(),
+		})
+	}
+}
+
+macro_rules! with_ctx {
+	($parser:expr, $name:expr, $body:block) => {{
+		$parser.dbg_ctx.call_stack.push($name);
+		$parser.dbg_ctx.debug_log.push(format!("Entering {}", $name));
+		let result = $body;
+		$parser.dbg_ctx.debug_log.push(format!("Exiting {}", $name));
+		$parser.dbg_ctx.call_stack.pop();
+		result
+	}};
+}
+
+type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub(super) struct Parser<'a,'b> {
@@ -60,6 +131,7 @@ pub(super) struct Parser<'a,'b> {
 
 	// DEBUG
 	dbg_depth: usize,
+	dbg_ctx: Context,
 }
 
 impl<'a,'b> Parser<'a,'b> {
@@ -76,6 +148,7 @@ impl<'a,'b> Parser<'a,'b> {
 			functions: HashSet::default(),
 
 			dbg_depth: 2,
+			dbg_ctx: Context::default(),
 		}
 	}
 
@@ -84,7 +157,7 @@ impl<'a,'b> Parser<'a,'b> {
 	}
 
 	/// program := expr*
-	pub fn program(&mut self) -> miette::Result<NodeId> {
+	pub fn program(&mut self) -> Result<NodeId> {
 		let mut program = Vec::default();
 		self.scopes.push();
 		while self.peek(0).tt != TokenType::Eof {
@@ -100,7 +173,7 @@ impl<'a,'b> Parser<'a,'b> {
 			program.push(nx);
 		}
 		let scope = self.scopes.pop()
-			.expect("empty scope-list in `parser::program`");
+			.ok_or_else(|| self.dbg_ctx.with_msg("empty scope-list in `parser::program`"))?;
 		let nx = self.nodes.new_block(program, scope, 0..self.source.len());
 		Ok(nx)
 	}
@@ -194,543 +267,579 @@ fn log_item<T: std::fmt::Display>(item: T, depth: usize) {
 }
 
 impl Parser<'_,'_> {
-	pub(super) fn num(&mut self) -> miette::Result<i64> {
-		log("Num", self.dbg_depth);
-		self.dbg_depth += 2;
-		let out = match self.peek(0).tt.clone() {
-			TokenType::Integer(s) => {
-				self.index += 1;
-				Ok(s.parse::<i64>()
-					.into_diagnostic()?)
-			}
-			TokenType::Fixed(s) => {
-				self.index += 1;
-				Ok(float_to_fixed(s
-					.chars()
-					.filter(|c| *c != '_')
-					.collect::<String>()
-					.parse::<f64>()
-					.into_diagnostic()
-					.wrap_err("lexer should not allow invalid fixed-point values")?))
-			}
-			TokenType::Eof => Err(eof_error(self, "Number")),
-			_ => Err(expected(self, "Number")),
-		};
-		self.dbg_depth -= 2;
-		out
+	pub(super) fn num(&mut self) -> Result<i64> {
+		with_ctx!(self, "Num", {
+			log("Num", self.dbg_depth);
+			self.dbg_depth += 2;
+			let out = match self.peek(0).tt.clone() {
+				TokenType::Integer(s) => {
+					self.index += 1;
+					Ok(s.parse::<i64>()
+						.into_diagnostic()?)
+				}
+				TokenType::Fixed(s) => {
+					self.index += 1;
+					Ok(float_to_fixed(s
+						.chars()
+						.filter(|c| *c != '_')
+						.collect::<String>()
+						.parse::<f64>()
+						.into_diagnostic()
+						.wrap_err("lexer should not allow invalid fixed-point values")?))
+				}
+				TokenType::Eof => Err(eof_error(self, "Number")),
+				_ => Err(expected(self, "Number")),
+			};
+			self.dbg_depth -= 2;
+			out
+		})
 	}
 
-	pub(super) fn ident(&mut self) -> miette::Result<Rc<str>> {
-		log("Ident", self.dbg_depth);
-		self.dbg_depth += 2;
-		let out = match self.peek(0).tt.clone() {
-			TokenType::Ident(s) => {
-				log_item(&s, self.dbg_depth);
-				self.index += 1;
-				Ok(s)
-			}
-			TokenType::Eof => Err(eof_error(self, "Identifier")),
-			_ => Err(expected(self, "Identifier")),
-		};
-		self.dbg_depth -= 2;
-		out
+	pub(super) fn ident(&mut self) -> Result<Rc<str>> {
+		with_ctx!(self, "Ident", {
+			log("Ident", self.dbg_depth);
+			self.dbg_depth += 2;
+			let out = match self.peek(0).tt.clone() {
+				TokenType::Ident(s) => {
+					log_item(&s, self.dbg_depth);
+					self.index += 1;
+					Ok(s)
+				}
+				TokenType::Eof => Err(eof_error(self, "Identifier")),
+				_ => Err(expected(self, "Identifier")),
+			};
+			self.dbg_depth -= 2;
+			out
+		})
 	}
 
-	pub(super) fn parse_fixed_point(&self, prefix: &str, max_bits: u8) -> miette::Result<u8> {
-		let token = self.peek(0);
-		let token_str = token.to_string();
-		let Some(bit_spec) = token_str.strip_prefix(prefix) else {
-			let msg = format!("Parsed as fixed-point type that doesn't start with '{prefix}'");
-			return Err(error(self.source, token.range(), &msg));
-		};
+	pub(super) fn parse_fixed_point(&mut self, prefix: &str, max_bits: u8) -> Result<u8> {
+		with_ctx!(self, "parse_fixed_point", {
+			let token = self.peek(0);
+			let token_str = token.to_string();
+			let Some(bit_spec) = token_str.strip_prefix(prefix) else {
+				let msg = format!("Parsed as fixed-point type that doesn't start with '{prefix}'");
+				return Err(error(self.source, token.range(), &msg));
+			};
 
-		let bits = if bit_spec.is_empty() {
-			max_bits / 2
-		} else if let Ok(bits) = bit_spec.parse::<u8>() {
-			bits
-		} else {
-			let msg = format!("Unable to parse '{token}' into fixed-point type");
-			return Err(error(self.source, token.range(), &msg));
-		};
-
-		if bits > max_bits {
-			return Err(expected(self, &format!("Bit specifier between 0..={max_bits}")));
-		}
-
-		Ok(bits)
-	}
-
-	pub(super) fn value_type(&mut self) -> miette::Result<ValueType> {
-		log("ValueType", self.dbg_depth);
-		self.dbg_depth += 2;
-		let token = self.peek(0).clone();
-		let result = match token.tt {
-			TokenType::U8  => Ok(ValueType::to_u8()),
-			TokenType::U16 => Ok(ValueType::to_u16()),
-			TokenType::U32 => Ok(ValueType::to_u32()),
-			TokenType::S8  => Ok(ValueType::to_s8()),
-			TokenType::S16 => Ok(ValueType::to_s16()),
-			TokenType::S32 => Ok(ValueType::to_s32()),
-			TokenType::F16(_) => self.parse_fixed_point("fw", 16).map(ValueType::to_f16),
-			TokenType::F32(_) => self.parse_fixed_point("fd", 32).map(ValueType::to_f32),
-			TokenType::Ident(ref s) => Ok(ValueType::Udt(Rc::clone(s))),
-			_ => Err(expected(self, "Value Type")),
-		};
-		self.index += 1;
-		log_item(&token, self.dbg_depth);
-		self.dbg_depth -= 2;
-		result
-	}
-
-	pub(super) fn match_token(&mut self, tt: TokenType) -> miette::Result<()> {
-		match self.peek(0).tt.clone() {
-			t if t != tt => if t == TokenType::Eof {
-				Err(report(self.source, self.peek(-1).range(), "after here",
-					&format!("Expected {tt:?}. Found EoF")))
+			let bits = if bit_spec.is_empty() {
+				max_bits / 2
+			} else if let Ok(bits) = bit_spec.parse::<u8>() {
+				bits
 			} else {
-				Err(expected(self, &format!("{tt:?}")))
+				let msg = format!("Unable to parse '{token}' into fixed-point type");
+				return Err(error(self.source, token.range(), &msg));
+			};
+
+			if bits > max_bits {
+				return Err(expected(self, &format!("Bit specifier between 0..={max_bits}")));
 			}
-			_ => {
-				self.index += 1;
-				Ok(())
-			}
-		}
+
+			Ok(bits)
+		})
 	}
 
-	pub(super) fn ident_typed(&mut self) -> miette::Result<(Rc<str>, ValueType, TokenInfo)> {
-		log("TypedIdent", self.dbg_depth);
-		self.dbg_depth += 2;
-		let start = self.peek(0).range().start;
-		let result = self.ident()
-			.and_then(|id| self.match_token(TokenType::Colon).map(|_| id))
-			.and_then(|id| self.value_type().map(|vt| {
-				let end = self.peek(-1).range().end;
-				(Rc::clone(&id), vt, start..end)
-			}));
-		self.dbg_depth -= 2;
-		result
+	pub(super) fn value_type(&mut self) -> Result<ValueType> {
+		with_ctx!(self, "value_type", {
+			log("ValueType", self.dbg_depth);
+			self.dbg_depth += 2;
+			let token = self.peek(0).clone();
+			let result = match token.tt {
+				TokenType::U8  => Ok(ValueType::to_u8()),
+				TokenType::U16 => Ok(ValueType::to_u16()),
+				TokenType::U32 => Ok(ValueType::to_u32()),
+				TokenType::S8  => Ok(ValueType::to_s8()),
+				TokenType::S16 => Ok(ValueType::to_s16()),
+				TokenType::S32 => Ok(ValueType::to_s32()),
+				TokenType::F16(_) => self.parse_fixed_point("fw", 16).map(ValueType::to_f16),
+				TokenType::F32(_) => self.parse_fixed_point("fd", 32).map(ValueType::to_f32),
+				TokenType::Ident(ref s) => Ok(ValueType::Udt(Rc::clone(s))),
+				_ => Err(expected(self, "Value Type")),
+			};
+			self.index += 1;
+			log_item(&token, self.dbg_depth);
+			self.dbg_depth -= 2;
+			result
+		})
+	}
+
+	pub(super) fn match_token(&mut self, tt: TokenType) -> Result<()> {
+		with_ctx!(self, "match_token", {
+			match self.peek(0).tt.clone() {
+				t if t != tt => if t == TokenType::Eof {
+					Err(report(self.source, self.peek(-1).range(), "after here",
+						&format!("Expected {tt:?}. Found EoF")))
+				} else {
+					Err(expected(self, &format!("{tt:?}")))
+				}
+				_ => {
+					self.index += 1;
+					Ok(())
+				}
+			}
+		})
+	}
+
+	pub(super) fn ident_typed(&mut self) -> Result<(Rc<str>, ValueType, TokenInfo)> {
+		with_ctx!(self, "ident_typed", {
+			log("TypedIdent", self.dbg_depth);
+			self.dbg_depth += 2;
+			let start = self.peek(0).range().start;
+			let result = self.ident()
+				.and_then(|id| self.match_token(TokenType::Colon).map(|_| id))
+				.and_then(|id| self.value_type().map(|vt| {
+					let end = self.peek(-1).range().end;
+					(Rc::clone(&id), vt, start..end)
+				}));
+			self.dbg_depth -= 2;
+			result
+		})
 	}
 
 	/// args := (expr (',' expr)* ','?)?
 	pub(super) fn args(&mut self) -> Option<Vec<NodeId>> {
-		log("Args", self.dbg_depth);
-		self.dbg_depth += 2;
-		let first = self.expr(0)
-			.ok()?;
-		let mut out = vec![first];
-		while let Ok(next) = self.match_token(TokenType::Comma)
-			.and_then(|_| self.expr(0))
-		{
-			out.push(next);
-		}
-		let _ = self.match_token(TokenType::Comma);
-		self.dbg_depth -= 2;
-		Some(out)
+		with_ctx!(self, "args", {
+			log("Args", self.dbg_depth);
+			self.dbg_depth += 2;
+			let first = self.expr(0)
+				.ok()?;
+			let mut out = vec![first];
+			while let Ok(next) = self.match_token(TokenType::Comma)
+				.and_then(|_| self.expr(0))
+			{
+				out.push(next);
+			}
+			let _ = self.match_token(TokenType::Comma);
+			self.dbg_depth -= 2;
+			Some(out)
+		})
 	}
 
 	/// if := 'if' expr block ('else' block)?
-	pub(super) fn stmt_if(&mut self) -> miette::Result<NodeId> {
-		log("If", self.dbg_depth);
-		self.dbg_depth += 2;
-		let start = self.peek(0).range().start;
-		self.match_token(TokenType::If)?;
-		let cond = self.expr(0)?;
+	pub(super) fn stmt_if(&mut self) -> Result<NodeId> {
+		with_ctx!(self, "stmt_if", {
+			log("If", self.dbg_depth);
+			self.dbg_depth += 2;
+			let start = self.peek(0).range().start;
+			self.match_token(TokenType::If)?;
+			let cond = self.expr(0)?;
 
-		let f_scopes = self.scopes.clone();
+			let f_scopes = self.scopes.clone();
 
-		let bt = {
-			self.scopes.push();
-			let (body, info) = self.block()?;
-			let scope = self.scopes.pop()
-				.expect("empty scope-list in `parser::stmt_if::true_block`");
-			self.nodes.new_block(body, scope, info)
-		};
-		let t_scopes = self.scopes.clone();
+			let bt = {
+				self.scopes.push();
+				let (body, info) = self.block()?;
+				let scope = self.scopes.pop()
+					.ok_or_else(|| self.dbg_ctx.with_msg("empty scope-list in `parser::stmt_if::true_block`"))?;
+				self.nodes.new_block(body, scope, info)
+			};
+			let t_scopes = self.scopes.clone();
 
-		self.scopes = f_scopes;
-		let bf = if self.match_token(TokenType::Else).is_ok() {
-			self.scopes.push();
-			let (body, info) = self.block()?;
-			let scope = self.scopes.pop()
-				.expect("empty scope-list in `parser::stmt_if::false_block`");
-			Some(self.nodes.new_block(body, scope, info))
-		} else {
-			None
-		};
+			self.scopes = f_scopes;
+			let bf = if self.match_token(TokenType::Else).is_ok() {
+				self.scopes.push();
+				let (body, info) = self.block()?;
+				let scope = self.scopes.pop()
+					.ok_or_else(|| self.dbg_ctx.with_msg("empty scope-list in `parser::stmt_if::false_block`"))?;
+				Some(self.nodes.new_block(body, scope, info))
+			} else {
+				None
+			};
 
-		self.scopes = ScopeTracker::merge(
-			&mut self.nodes,
-			t_scopes,
-			self.scopes.clone())?;
+			self.scopes = ScopeTracker::merge(
+				&mut self.nodes,
+				t_scopes,
+				self.scopes.clone())?;
 
-		let end = self.peek(-1).range().end;
-		self.dbg_depth -= 2;
-		Ok(self.nodes.new_if(cond, bt, bf, start..end))
+			let end = self.peek(-1).range().end;
+			self.dbg_depth -= 2;
+			Ok(self.nodes.new_if(cond, bt, bf, start..end))
+		})
 	}
 
-	fn expr_call(&mut self, lhs: NodeId, op_token: Token) -> miette::Result<NodeId> {
-		let lhs_node = self.nodes.get(lhs)?.clone();
-		let name = match lhs_node.expr {
-			Expr::Id(name) => name,
-			_ => return Err(expected(self, "Identifier")),
-		};
+	fn expr_call(&mut self, lhs: NodeId, op_token: Token) -> Result<NodeId> {
+		with_ctx!(self, "expr_call", {
+			let lhs_node = self.nodes.get(lhs)?.clone();
+			let name = match lhs_node.expr {
+				Expr::Id(name) => name,
+				_ => return Err(expected(self, "Identifier")),
+			};
 
-		self.index += 1;
-		let args = self.args().unwrap_or_default();
+			self.index += 1;
+			let args = self.args().unwrap_or_default();
 
-		if TokenType::CParen != self.peek(0).tt {
-			return Err(expected(self, ")"));
-		}
-		self.index += 1;
-
-		if !self.functions.contains(&name) {
-			if let Some(rx) = self.scopes.find(&name) {
-				let def = self.nodes.get(rx)?;
-				if let Expr::Fun { params,..} = &def.expr {
-					assert_eq!(args.len(), params.len(),
-						"mismatched argument and parameter lists");
-				}
+			if TokenType::CParen != self.peek(0).tt {
+				return Err(expected(self, ")"));
 			}
-		} else {
-			return Err(error(self.source, op_token.range(),
-				&format!("Call to unknown function '{name}'"),
-			));
-		}
-		Ok(self.nodes.new_call(&name, args, lhs_node.info.start..op_token.range().end))
-	}
+			self.index += 1;
 
-	pub(super) fn expr(&mut self, min_bp: u8) -> miette::Result<NodeId> {
-		log("Expr", self.dbg_depth);
-		self.dbg_depth += 2;
-		use TokenType as TT;
-
-		let left_token = self.peek(0);
-		let mut lhs: NodeId = match left_token.tt {
-			TT::Rec => self.stmt_rec()?,
-			TT::Fun => self.stmt_fn()?,
-			TT::If => self.stmt_if()?,
-			TT::Var => self.stmt_var()?,
-			TT::While => self.stmt_while()?,
-
-			TT::True => {
-				let token = left_token.clone();
-				self.index += 1;
-				self.nodes.new_bool(true, token.range())
-			}
-			TT::False => {
-				let token = left_token.clone();
-				self.index += 1;
-				self.nodes.new_bool(false, token.range())
-			}
-
-			TT::Ident(ref s) => {
-				// HACK - srenshaw - We probably need a more robust way to distinguish between Record
-				// initialization, "ident -> block" sequences, and assignment.
-				if self.peek(1).tt == TT::OBrace && self.peek(3).tt == TT::Colon {
-					self.expr_rec_init()?
-				} else {
-					let token = left_token.clone();
-					let s = Rc::clone(s);
-					self.index += 1;
-					if let Some(nx) = self.scopes.find(&s) {
-						nx
-					} else {
-						let nx = self.nodes.new_id(&s, ValueType::Any, token.range());
-						self.scopes.insert(&s, nx)
+			if !self.functions.contains(&name) {
+				if let Some(rx) = self.scopes.find(&name) {
+					let def = self.nodes.get(rx)?;
+					if let Expr::Fun { params,..} = &def.expr {
+						assert_eq!(args.len(), params.len(),
+							"mismatched argument and parameter lists");
 					}
 				}
+			} else {
+				return Err(error(self.source, op_token.range(),
+					&format!("Call to unknown function '{name}'"),
+				));
 			}
+			Ok(self.nodes.new_call(&name, args, lhs_node.info.start..op_token.range().end))
+		})
+	}
 
-			TT::Integer(_) => {
-				let token = left_token.clone();
-				let num = self.num()?;
-				self.nodes.new_num(num, ValueType::Int(Int::Bot), token.range())
-			}
+	pub(super) fn expr(&mut self, min_bp: u8) -> Result<NodeId> {
+		with_ctx!(self, "expr", {
+			log("Expr", self.dbg_depth);
+			self.dbg_depth += 2;
+			use TokenType as TT;
 
-			TT::Fixed(_) => {
-				let token = left_token.clone();
-				let num = self.num()?;
-				self.nodes.new_num(num, ValueType::Fix(Fix::Bot), token.range())
-			}
+			let left_token = self.peek(0);
+			let mut lhs: NodeId = match left_token.tt {
+				TT::Rec => self.stmt_rec()?,
+				TT::Fun => self.stmt_fn()?,
+				TT::If => self.stmt_if()?,
+				TT::Var => self.stmt_var()?,
+				TT::While => self.stmt_while()?,
 
-			TT::OParen => {
-				self.index += 1;
-				let lhs = self.expr(0)?;
-				if TT::CParen != self.peek(0).tt {
-					return Err(expected(self, ")"));
+				TT::True => {
+					let token = left_token.clone();
+					self.index += 1;
+					self.nodes.new_bool(true, token.range())
 				}
-				self.index += 1;
-				lhs
-			}
+				TT::False => {
+					let token = left_token.clone();
+					self.index += 1;
+					self.nodes.new_bool(false, token.range())
+				}
 
-			TT::Plus |
-			TT::Minus |
-			TT::Dollar |
-			TT::At |
-			TT::Bang => {
-				let Some(r_bp) = prefix_binding_power(&self.peek(0).tt) else {
-					return Err(expected(self, "Unary Operator"));
-				};
-				let token = left_token.clone();
-				self.index += 1;
-				let rhs = self.expr(r_bp)?;
-				self.nodes.new_unary((&token.tt).try_into()?, rhs, token.range())
-					.map_err(|err| err.with_source_code(self.source.to_string()))?
-			}
+				TT::Ident(ref s) => {
+					// HACK - srenshaw - We probably need a more robust way to distinguish between Record
+					// initialization, "ident -> block" sequences, and assignment.
+					if self.peek(1).tt == TT::OBrace && self.peek(3).tt == TT::Colon {
+						self.expr_rec_init()?
+					} else {
+						let token = left_token.clone();
+						let s = Rc::clone(s);
+						self.index += 1;
+						if let Some(nx) = self.scopes.find(&s) {
+							nx
+						} else {
+							let nx = self.nodes.new_id(&s, ValueType::Any, token.range());
+							self.scopes.insert(&s, nx)
+						}
+					}
+				}
 
-			TT::Eof => return Err(eof_error(self, "Identifier, Function Call, or Literal")),
+				TT::Integer(_) => {
+					let token = left_token.clone();
+					let num = self.num()?;
+					self.nodes.new_num(num, ValueType::Int(Int::Bot), token.range())
+				}
 
-			_ => return Err(expected(self, "Identifier, Function Call, or Literal")),
-		};
+				TT::Fixed(_) => {
+					let token = left_token.clone();
+					let num = self.num()?;
+					self.nodes.new_num(num, ValueType::Fix(Fix::Bot), token.range())
+				}
 
-		loop {
-			let op_token = self.peek(0).clone();
-			if matches!(op_token.tt,
-				TT::Ident(_) | TT::Integer(_) | TT::Fixed(_) |
-				TT::If | TT::Else | TT::While |
-				TT::Fun | TT::Rec | TT::Var |
-				TT::U8 | TT::U16 | TT::U32 |
-				TT::S8 | TT::S16 | TT::S32 |
-				TT::F16(_) | TT::F32(_) |
-				TT::OBrace |
-				TT::Colon | TT::CBrace | TT::CParen |
-				TT::Eof) {
-				break;
-			}
+				TT::OParen => {
+					self.index += 1;
+					let lhs = self.expr(0)?;
+					if TT::CParen != self.peek(0).tt {
+						return Err(expected(self, ")"));
+					}
+					self.index += 1;
+					lhs
+				}
 
-			if TT::OParen == op_token.tt {
-				lhs = self.expr_call(lhs, op_token)?;
-				continue;
-			}
+				TT::Plus |
+				TT::Minus |
+				TT::Dollar |
+				TT::At |
+				TT::Bang => {
+					let Some(r_bp) = prefix_binding_power(&self.peek(0).tt) else {
+						return Err(expected(self, "Unary Operator"));
+					};
+					let token = left_token.clone();
+					self.index += 1;
+					let rhs = self.expr(r_bp)?;
+					self.nodes.new_unary((&token.tt).try_into()?, rhs, token.range())
+						.map_err(|err| err.with_source_code(self.source.to_string()))?
+				}
 
-			if let Some((l_bp,r_bp)) = infix_binding_power(&op_token.tt) {
-				if l_bp < min_bp {
+				TT::Eof => return Err(eof_error(self, "Identifier, Function Call, or Literal")),
+
+				_ => return Err(expected(self, "Identifier, Function Call, or Literal")),
+			};
+
+			loop {
+				let op_token = self.peek(0).clone();
+				if matches!(op_token.tt,
+					TT::Ident(_) | TT::Integer(_) | TT::Fixed(_) |
+					TT::If | TT::Else | TT::While |
+					TT::Fun | TT::Rec | TT::Var |
+					TT::U8 | TT::U16 | TT::U32 |
+					TT::S8 | TT::S16 | TT::S32 |
+					TT::F16(_) | TT::F32(_) |
+					TT::OBrace |
+					TT::Colon | TT::CBrace | TT::CParen |
+					TT::Eof) {
 					break;
 				}
 
-				self.index += 1;
-				let op: BinaryOp = (&op_token.tt).try_into()?;
-				let rhs = self.expr(r_bp)?;
-				lhs = self.nodes.new_binary(op, lhs, rhs, op_token.range())?;
-				continue;
+				if TT::OParen == op_token.tt {
+					lhs = self.expr_call(lhs, op_token)?;
+					continue;
+				}
+
+				if let Some((l_bp,r_bp)) = infix_binding_power(&op_token.tt) {
+					if l_bp < min_bp {
+						break;
+					}
+
+					self.index += 1;
+					let op: BinaryOp = (&op_token.tt).try_into()?;
+					let rhs = self.expr(r_bp)?;
+					lhs = self.nodes.new_binary(op, lhs, rhs, op_token.range())?;
+					continue;
+				}
+
+				break;
 			}
 
-			break;
-		}
-
-		log_item(self.nodes.get(lhs)?, self.dbg_depth);
-		self.dbg_depth -= 2;
-		Ok(lhs)
+			log_item(self.nodes.get(lhs)?, self.dbg_depth);
+			self.dbg_depth -= 2;
+			Ok(lhs)
+		})
 	}
 
 	/// field_init := ident ':' (block | expr)
-	fn field_init(&mut self) -> miette::Result<(Rc<str>, NodeId)> {
-		log("FieldInit", self.dbg_depth);
-		self.dbg_depth += 2;
-		let id = self.ident()?;
-		self.match_token(TokenType::Colon)?;
-		let body = if self.peek(1).tt == TokenType::OBrace {
-			self.scopes.push();
-			let (body, info) = self.block()?;
-			let scope = self.scopes.pop()
-				.expect("empty scope-list in `parser::field_init`");
-			self.nodes.new_block(body, scope, info)
-		} else {
-			self.expr(0)?
-		};
-		self.dbg_depth -= 2;
-		Ok((id, body))
+	fn field_init(&mut self) -> Result<(Rc<str>, NodeId)> {
+		with_ctx!(self, "field_init", {
+			log("FieldInit", self.dbg_depth);
+			self.dbg_depth += 2;
+			let id = self.ident()?;
+			self.match_token(TokenType::Colon)?;
+			let body = if self.peek(1).tt == TokenType::OBrace {
+				self.scopes.push();
+				let (body, info) = self.block()?;
+				let scope = self.scopes.pop()
+					.ok_or_else(|| self.dbg_ctx.with_msg("empty scope-list in `parser::field_init`"))?;
+				self.nodes.new_block(body, scope, info)
+			} else {
+				self.expr(0)?
+			};
+			self.dbg_depth -= 2;
+			Ok((id, body))
+		})
 	}
 
 	/// expr_rec_init := ident '{' field_init* '}'
-	pub(super) fn expr_rec_init(&mut self) -> miette::Result<NodeId> {
-		log("RecInit", self.dbg_depth);
-		self.dbg_depth += 2;
-		let start = self.peek(0).range().start;
-		let id = self.ident()?;
-		self.match_token(TokenType::OBrace)?;
-		let mut fields = vec![];
-		if let Ok(first) = self.field_init() {
-			fields.push(first);
+	pub(super) fn expr_rec_init(&mut self) -> Result<NodeId> {
+		with_ctx!(self, "expr_rec_init", {
+			log("RecInit", self.dbg_depth);
+			self.dbg_depth += 2;
+			let start = self.peek(0).range().start;
+			let id = self.ident()?;
+			self.match_token(TokenType::OBrace)?;
+			let mut fields = vec![];
+			if let Ok(first) = self.field_init() {
+				fields.push(first);
 
-			while let Ok(field) = self.match_token(TokenType::Comma)
-				.and_then(|_| self.field_init())
-			{
-				fields.push(field);
+				while let Ok(field) = self.match_token(TokenType::Comma)
+					.and_then(|_| self.field_init())
+				{
+					fields.push(field);
+				}
+				let _ = self.match_token(TokenType::Comma);
 			}
-			let _ = self.match_token(TokenType::Comma);
-		}
-		self.match_token(TokenType::CBrace)?;
-		let end = self.peek(-1).range().end;
-		self.dbg_depth -= 2;
-		Ok(self.nodes.new_rec_init(&id, fields, start..end))
+			self.match_token(TokenType::CBrace)?;
+			let end = self.peek(-1).range().end;
+			self.dbg_depth -= 2;
+			Ok(self.nodes.new_rec_init(&id, fields, start..end))
+		})
 	}
 
 	/// params := ( typed_ident (',' typed_ident)* ','? )?
 	pub(super) fn params(&mut self) -> Vec<(Rc<str>, ValueType, TokenInfo)> {
-		log("Params", self.dbg_depth);
-		self.dbg_depth += 2;
+		with_ctx!(self, "params", {
+			log("Params", self.dbg_depth);
+			self.dbg_depth += 2;
 
-		let Ok(first) = self.ident_typed() else {
+			let Ok(first) = self.ident_typed() else {
+				self.dbg_depth -= 2;
+				return vec![];
+			};
+
+			let mut out = vec![first];
+			while let Ok(id) = self.match_token(TokenType::Comma)
+				.and_then(|_| self.ident_typed())
+			{
+				out.push(id);
+			}
+
+			let _ = self.match_token(TokenType::Comma);
 			self.dbg_depth -= 2;
-			return vec![];
-		};
-
-		let mut out = vec![first];
-		while let Ok(id) = self.match_token(TokenType::Comma)
-			.and_then(|_| self.ident_typed())
-		{
-			out.push(id);
-		}
-
-		let _ = self.match_token(TokenType::Comma);
-		self.dbg_depth -= 2;
-		out
+			out
+		})
 	}
 
 	/// block := '{' expr* '}'
-	pub(super) fn block(&mut self) -> miette::Result<(Vec<NodeId>, TokenInfo)> {
-		log("Block", self.dbg_depth);
-		self.dbg_depth += 2;
-		let start = self.peek(0).range().start;
-		match self.match_token(TokenType::OBrace) {
-			Ok(_) => {},
-			Err(e) => {
-				self.dbg_depth -= 2;
-				return Err(e);
+	pub(super) fn block(&mut self) -> Result<(Vec<NodeId>, TokenInfo)> {
+		with_ctx!(self, "block", {
+			log("Block", self.dbg_depth);
+			self.dbg_depth += 2;
+			let start = self.peek(0).range().start;
+			match self.match_token(TokenType::OBrace) {
+				Ok(_) => {},
+				Err(e) => {
+					self.dbg_depth -= 2;
+					return Err(e);
+				}
 			}
-		}
-		let mut body = Vec::new();
-		while let Ok(expr) = self.expr(0) {
-			body.push(expr);
-		}
-		let result = self.match_token(TokenType::CBrace)
-			.map(|_| {
-				let end = self.peek(-1).range().end;
-				(body, start..end)
-			});
-		self.dbg_depth -= 2;
-		result
+			let mut body = Vec::new();
+			while let Ok(expr) = self.expr(0) {
+				body.push(expr);
+			}
+			let result = self.match_token(TokenType::CBrace)
+				.map(|_| {
+					let end = self.peek(-1).range().end;
+					(body, start..end)
+				});
+			self.dbg_depth -= 2;
+			result
+		})
 	}
 
 	/// rec := 'rec' ident '{' params '}'
-	pub(super) fn stmt_rec(&mut self) -> miette::Result<NodeId> {
-		log("Record", self.dbg_depth);
-		self.dbg_depth += 2;
-		let start = self.peek(0).range().start;
-		self.match_token(TokenType::Rec)?;
-		let name = self.ident()?;
-		self.match_token(TokenType::OBrace)?;
-		let fields = self.params()
-			.into_iter()
-			.map(|(fname, ftype, finfo)| self.nodes.new_id(&fname, ftype, finfo))
-			.collect();
-		self.match_token(TokenType::CBrace)?;
-		let end = self.peek(-1).range().end;
-		self.dbg_depth -= 2;
+	pub(super) fn stmt_rec(&mut self) -> Result<NodeId> {
+		with_ctx!(self, "stmt_rec", {
+			log("Record", self.dbg_depth);
+			self.dbg_depth += 2;
+			let start = self.peek(0).range().start;
+			self.match_token(TokenType::Rec)?;
+			let name = self.ident()?;
+			self.match_token(TokenType::OBrace)?;
+			let fields = self.params()
+				.into_iter()
+				.map(|(fname, ftype, finfo)| self.nodes.new_id(&fname, ftype, finfo))
+				.collect();
+			self.match_token(TokenType::CBrace)?;
+			let end = self.peek(-1).range().end;
+			self.dbg_depth -= 2;
 
-		if self.records.contains(&name) {
-			return Err(error(self.source, start..end,
-				"A record with this name is already defined"));
-		}
-		self.records.insert(Rc::clone(&name));
+			if self.records.contains(&name) {
+				return Err(error(self.source, start..end,
+					"A record with this name is already defined"));
+			}
+			self.records.insert(Rc::clone(&name));
 
-		let nx = self.nodes.new_rec(&name, fields, start..end);
-		self.scopes.insert(&name, nx);
-		Ok(nx)
+			let nx = self.nodes.new_rec(&name, fields, start..end);
+			self.scopes.insert(&name, nx);
+			Ok(nx)
+		})
 	}
 
 	/// fn := 'fn' ident '(' params ')' ('->' value_type)? block
-	pub(super) fn stmt_fn(&mut self) -> miette::Result<NodeId> {
-		log("Function", self.dbg_depth);
-		self.dbg_depth += 2;
-		let start = self.peek(0).range().start;
-		self.match_token(TokenType::Fun)?;
-		let name = self.ident()?;
-		self.match_token(TokenType::OParen)?;
-		let params = self.params();
-		self.match_token(TokenType::CParen)?;
-		let rtype = self.match_token(TokenType::RetArrow)
-			.and_then(|_| self.value_type())
-			.unwrap_or(ValueType::Unit);
+	pub(super) fn stmt_fn(&mut self) -> Result<NodeId> {
+		with_ctx!(self, "stmt_fn", {
+			log("Function", self.dbg_depth);
+			self.dbg_depth += 2;
+			let start = self.peek(0).range().start;
+			self.match_token(TokenType::Fun)?;
+			let name = self.ident()?;
+			self.match_token(TokenType::OParen)?;
+			let params = self.params();
+			self.match_token(TokenType::CParen)?;
+			let rtype = self.match_token(TokenType::RetArrow)
+				.and_then(|_| self.value_type())
+				.unwrap_or(ValueType::Unit);
 
-		let (params, body) = {
-			self.scopes.push();
-			let params = params.iter()
-				.map(|(pname, ptype, pinfo)| {
-					let px = self.nodes.new_var(pname, ptype.clone(), None, pinfo.clone());
-					self.scopes.insert(pname, px)
-				})
-				.collect();
-			let (body,info) = self.block()?;
-			let scope = self.scopes.pop()
-				.expect("empty scope-list in `parser::stmt_fn`");
-			(params, self.nodes.new_block(body, scope, info))
-		};
+			let (params, body) = {
+				self.scopes.push();
+				let params = params.iter()
+					.map(|(pname, ptype, pinfo)| {
+						let px = self.nodes.new_var(pname, ptype.clone(), None, pinfo.clone());
+						self.scopes.insert(pname, px)
+					})
+					.collect();
+				let (body,info) = self.block()?;
+				let scope = self.scopes.pop()
+					.ok_or_else(|| self.dbg_ctx.with_msg("empty scope-list in `parser::stmt_fn`"))?;
+				(params, self.nodes.new_block(body, scope, info))
+			};
 
-		let end = self.peek(-1).range().end;
-		self.dbg_depth -= 2;
+			let end = self.peek(-1).range().end;
+			self.dbg_depth -= 2;
 
-		if self.functions.contains(&name) {
-			return Err(error(self.source, start..end,
-				"A function with this name is already defined"));
-		}
-		self.functions.insert(Rc::clone(&name));
+			if self.functions.contains(&name) {
+				return Err(error(self.source, start..end,
+					"A function with this name is already defined"));
+			}
+			self.functions.insert(Rc::clone(&name));
 
-		Ok(self.nodes.new_fun(&name, params, rtype, body, start..end))
+			Ok(self.nodes.new_fun(&name, params, rtype, body, start..end))
+		})
 	}
 
 	/// var := 'var' ident (':' value_type)? '=' (block | expr)
-	pub(super) fn stmt_var(&mut self) -> miette::Result<NodeId> {
-		log("Variable", self.dbg_depth);
-		self.dbg_depth += 2;
-		let start = self.peek(0).range().start;
-		self.match_token(TokenType::Var)?;
-		let name = self.ident()?;
-		let vtype = self.match_token(TokenType::Colon)
-			.and_then(|_| self.value_type())
-			.unwrap_or(ValueType::Unit);
-		self.match_token(TokenType::Eq1)?;
-		let body = if self.peek(0).tt == TokenType::OBrace {
-			self.scopes.push();
-			let (body,info) = self.block()?;
-			let scope = self.scopes.pop()
-				.expect("empty scope-list in `parser::stmt_var`");
-			self.nodes.new_block(body, scope, info)
-		} else {
-			self.expr(0)?
-		};
-		let end = self.peek(-1).range().end;
-		self.dbg_depth -= 2;
+	pub(super) fn stmt_var(&mut self) -> Result<NodeId> {
+		with_ctx!(self, "stmt_var", {
+			log("Variable", self.dbg_depth);
+			self.dbg_depth += 2;
+			let start = self.peek(0).range().start;
+			self.match_token(TokenType::Var)?;
+			let name = self.ident()?;
+			let vtype = self.match_token(TokenType::Colon)
+				.and_then(|_| self.value_type())
+				.unwrap_or(ValueType::Unit);
+			self.match_token(TokenType::Eq1)?;
+			let body = if self.peek(0).tt == TokenType::OBrace {
+				self.scopes.push();
+				let (body,info) = self.block()?;
+				let scope = self.scopes.pop()
+					.ok_or_else(|| self.dbg_ctx.with_msg("empty scope-list in `parser::stmt_var`"))?;
+				self.nodes.new_block(body, scope, info)
+			} else {
+				self.expr(0)?
+			};
+			let end = self.peek(-1).range().end;
+			self.dbg_depth -= 2;
 
-		self.scopes.insert(&name, body);
+			self.scopes.insert(&name, body);
 
-		if self.nodes.get(body).map(|n| n.expr.is_const(&self.nodes))
-			.unwrap_or_default()
-		{
-			Ok(body)
-		} else {
-			Ok(self.nodes.new_var(&name, vtype, Some(body), start..end))
-		}
+			if self.nodes.get(body).map(|n| n.expr.is_const(&self.nodes))
+				.unwrap_or_default()
+			{
+				Ok(body)
+			} else {
+				Ok(self.nodes.new_var(&name, vtype, Some(body), start..end))
+			}
+		})
 	}
 
 	/// while := 'while' expr block
-	pub(super) fn stmt_while(&mut self) -> miette::Result<NodeId> {
-		log("While", self.dbg_depth);
-		self.dbg_depth += 2;
-		let start = self.peek(0).range().start;
-		self.match_token(TokenType::While)?;
-		let cond = self.expr(0)?;
-		let body = {
-			self.scopes.push();
-			let (body, info) = self.block()?;
-			let scope = self.scopes.pop()
-				.expect("empty scope-list in `parser::stmt_while`");
-			self.nodes.new_block(body, scope, info)
-		};
-		let end = self.peek(-1).range().end;
-		self.dbg_depth -= 2;
-		Ok(self.nodes.new_while(cond, body, start..end))
+	pub(super) fn stmt_while(&mut self) -> Result<NodeId> {
+		with_ctx!(self, "stmt_while", {
+			log("While", self.dbg_depth);
+			self.dbg_depth += 2;
+			let start = self.peek(0).range().start;
+			self.match_token(TokenType::While)?;
+			let cond = self.expr(0)?;
+			let body = {
+				self.scopes.push();
+				let (body, info) = self.block()?;
+				let scope = self.scopes.pop()
+					.ok_or_else(|| self.dbg_ctx.with_msg("empty scope-list in `parser::stmt_while`"))?;
+				self.nodes.new_block(body, scope, info)
+			};
+			let end = self.peek(-1).range().end;
+			self.dbg_depth -= 2;
+			Ok(self.nodes.new_while(cond, body, start..end))
+		})
 	}
 }
 
@@ -775,7 +884,7 @@ impl ScopeTracker {
 		nodes: &mut NodeStore,
 		mut t_scopes: ScopeTracker,
 		mut f_scopes: ScopeTracker,
-	) -> miette::Result<ScopeTracker> {
+	) -> Result<ScopeTracker> {
 		println!("merging scopes");
 
 		let mut scopes = vec![];

@@ -25,8 +25,6 @@ pub(crate) type TokenInfo = Range<usize>;
 #[cfg(test)]
 pub(crate) type TypedIdent = (Rc<str>, ValueType);
 
-use parser::Parser;
-
 #[derive(Debug)]
 pub(crate) struct Output {
 	pub(crate) start: NodeId,
@@ -107,15 +105,19 @@ pub fn eval(
 		miette::bail!("Empty input");
 	}
 
-	let mut parser = Parser::new(source, &input);
-	let start = parser.program()?;
-	print_nodes(2, start, &parser.nodes);
-	Ok(Output {
-		start,
-		store: parser.nodes,
-		records: parser.records,
-		functions: parser.functions,
-		scopes: parser.scopes,
-	})
+	let mut stepper = stepper(source, &input);
+	while let Some(result) = stepper.step() {
+		match result {
+			Ok(msg) => println!("[step] {msg}"),
+			Err(e) => eprintln!("[erro] {e}"),
+		}
+	}
+
+	let Some(out) = stepper.finish() else {
+		miette::bail!("Unable to retrieve output from Parser");
+	};
+
+	print_nodes(2, out.start, &out.store);
+	Ok(out)
 }
 

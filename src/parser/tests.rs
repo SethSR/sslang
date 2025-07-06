@@ -1,16 +1,17 @@
 
 use crate::lexer;
-use crate::parser::{
+
+use super::{
 	BinaryOp,
-	node::{Node, NodeId, NodeStore},
+	Int,
+	Node,
+	NodeId,
+	NodeStore,
 	TypedIdent,
 	UnaryOp,
-	Int,
-	parser::Scope,
 	ValueType as VT,
 };
-
-use super::Parser;
+use super::parser::{Parser, Scope};
 
 #[derive(Default)]
 struct Tester(NodeId, NodeStore);
@@ -188,9 +189,8 @@ fn parse_test(
 	eprintln!("input: {input}");
 	let tokens = lexer::eval(input)?;
 	eprintln!("tokens: {tokens:?}");
-	let mut parser = Parser::new(input, &tokens);
-	let start = parser.program()?;
-	assert_nodes(start, &parser.nodes, tester.0, &tester.1, 0);
+	let out = super::eval(input, tokens)?;
+	assert_nodes(out.start, &out.store, tester.0, &tester.1, 0);
 	Ok(())
 }
 

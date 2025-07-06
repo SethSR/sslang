@@ -3,6 +3,7 @@ use miette::IntoDiagnostic;
 use tracing::{info,debug};
 
 mod checker;
+mod context;
 mod tokens;
 mod lexer;
 mod parser;

@@ -1,6 +1,5 @@
 
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 use std::rc::Rc;
 
 use miette::{LabeledSpan, IntoDiagnostic, WrapErr};
@@ -8,63 +7,9 @@ use tracing::debug;
 
 use crate::tokens::{Token, TokenType};
 
+use super::{BinaryOp, Error, Expr, Fix, Int, TokenInfo, ValueType};
+use super::error::{Context, Result, error, report};
 use super::node::{NodeId, NodeStore};
-use super::{
-	BinaryOp,
-	Expr,
-	Fix,
-	Int,
-	TokenInfo,
-	ValueType,
-};
-
-#[derive(Debug)]
-pub(crate) enum Error {
-	Internal(Context),
-	Parse(miette::Report),
-}
-
-impl fmt::Display for Error {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		match self {
-			Self::Internal(context) => {
-				writeln!(f, "Context:")?;
-				for frame in &context.call_stack {
-					writeln!(f, "  - {frame}")?;
-				}
-				if context.message.is_empty() {
-					write!(f, "")
-				} else {
-					write!(f, "{}", context.message)
-				}
-			}
-			Self::Parse(report) => write!(f, "{report:?}"),
-		}
-	}
-}
-
-impl std::error::Error for Error {}
-
-impl From<miette::Report> for Error {
-	fn from(report: miette::Report) -> Self {
-		Self::Parse(report)
-	}
-}
-
-impl miette::Diagnostic for Error {}
-
-fn report(source: &str, info: TokenInfo, marker: &str, msg: &str) -> Error {
-	Error::Parse(miette::miette! {
-		labels = [
-			LabeledSpan::at(info, marker),
-		],
-		"{msg}"
-	}.with_source_code(source.to_owned()))
-}
-
-fn error(source: &str, info: TokenInfo, msg: &str) -> Error {
-	report(source, info, "here", msg)
-}
 
 fn eof_error(parser: &Parser, msg: &str) -> Error {
 	report(parser.source, parser.peek(-1).range(), "after here",
@@ -85,36 +30,6 @@ pub(crate) type Scope = HashMap<Rc<str>, NodeId>;
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ScopeTracker(Vec<Scope>);
-
-#[derive(Debug, Default, Clone)]
-pub(crate) struct Context {
-	pub call_stack: Vec<&'static str>,
-	pub debug_log: Vec<String>,
-	message: String,
-}
-
-impl Context {
-	fn with_msg(&self, msg: &str) -> Error {
-		Error::Internal(Self {
-			call_stack: self.call_stack.clone(),
-			debug_log: self.debug_log.clone(),
-			message: msg.to_string(),
-		})
-	}
-}
-
-macro_rules! with_ctx {
-	($parser:expr, $name:expr, $body:block) => {{
-		$parser.dbg_ctx.call_stack.push($name);
-		$parser.dbg_ctx.debug_log.push(format!("Entering {}", $name));
-		let result = $body;
-		$parser.dbg_ctx.debug_log.push(format!("Exiting {}", $name));
-		$parser.dbg_ctx.call_stack.pop();
-		result
-	}};
-}
-
-type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub(super) struct Parser<'a,'b> {

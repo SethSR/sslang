@@ -5,6 +5,8 @@ use std::rc::Rc;
 
 use crate::tokens::Token;
 
+#[macro_use]
+mod error;
 mod node;
 mod operators;
 #[allow(clippy::module_inception)]
@@ -14,10 +16,11 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use types::{Meet, ValueType, Int, Fix};
-pub(crate) use operators::{BinaryOp, UnaryOp};
+pub(crate) use error::Error;
 pub(crate) use node::{Expr, Node, NodeId, NodeStore};
+pub(crate) use operators::{BinaryOp, UnaryOp};
 pub(crate) use parser::ScopeTracker;
+pub(crate) use types::{Meet, ValueType, Int, Fix};
 
 pub(crate) use parser::stepper;
 

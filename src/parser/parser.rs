@@ -155,28 +155,68 @@ impl<'a,'b> Parser<'a,'b> {
 	pub fn peek(&self, offset: isize) -> &Token {
 		&self.input[self.index.saturating_add_signed(offset)]
 	}
+}
 
-	/// program := expr*
-	pub fn program(&mut self) -> Result<NodeId> {
-		let mut program = Vec::default();
-		self.scopes.push();
-		while self.peek(0).tt != TokenType::Eof {
-			let nx = self.expr(0)?;
-			let node = self.nodes.get(nx)?;
+impl Stepper<'_,'_> {
+	pub fn step(&mut self) -> Option<Result<String>> {
+		let Self { parser, program, start_nx } = self;
+		if parser.peek(0).tt == TokenType::Eof {
+			let scope = match parser.scopes.pop() {
+				Some(scope) => scope,
+				None => return Some(Err(parser.dbg_ctx.with_msg("empty scope-list in `parser::step`"))),
+			};
+			let nx = parser.nodes.new_block(program.clone(), scope, 0..parser.source.len());
+			*start_nx = Some(nx);
+			None
+		} else {
+			let nx = match parser.expr(0) {
+				Ok(nx) => nx,
+				Err(e) => return Some(Err(e)),
+			};
+			let node = match parser.nodes.get(nx) {
+				Ok(node) => node,
+				Err(e) => return Some(Err(Error::Parse(e))),
+			};
 			match &node.expr {
 				Expr::Var { name, ..} |
 				Expr::Fun { name, ..} => {
-					self.scopes.insert(name, nx);
+					parser.scopes.insert(name, nx);
 				}
 				_ => {}
 			}
 			program.push(nx);
+			Some(Ok(format!("Pushed top-level expression: '{node}'")))
 		}
-		let scope = self.scopes.pop()
-			.ok_or_else(|| self.dbg_ctx.with_msg("empty scope-list in `parser::program`"))?;
-		let nx = self.nodes.new_block(program, scope, 0..self.source.len());
-		Ok(nx)
 	}
+
+	pub fn finish(self) -> Option<super::Output> {
+		Some(super::Output {
+			start: self.start_nx?,
+			store: self.parser.nodes,
+			records: self.parser.records,
+			functions: self.parser.functions,
+			scopes: self.parser.scopes,
+		})
+	}
+}
+
+pub fn stepper<'a,'b>(
+	source: &'b str,
+	input: &'a [Token],
+) -> Stepper<'a,'b> {
+	let mut parser = Parser::new(source, input);
+	parser.scopes.push();
+	Stepper {
+		parser,
+		program: vec![],
+		start_nx: None,
+	}
+}
+
+pub struct Stepper<'a,'b> {
+	parser: Parser<'a,'b>,
+	program: Vec<NodeId>,
+	start_nx: Option<NodeId>,
 }
 
 fn float_to_fixed(n: f64) -> i64 {

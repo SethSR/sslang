@@ -7,6 +7,7 @@ mod context;
 mod tokens;
 mod lexer;
 mod parser;
+mod parser2;
 mod reducer;
 
 const TEST_INPUT: &str = "
@@ -114,7 +115,17 @@ fn main() -> miette::Result<()> {
 	}
 
 	info!("parsing");
-	let out = parser::eval(source, tokens)?;
+	let mut stepper = parser::stepper(source, &tokens);
+	while let Some(result) = stepper.step() {
+		match result {
+			Ok(msg) => println!("[step] {msg}"),
+			Err(e) => eprintln!("[erro] {e}"),
+		}
+	}
+	let out = stepper.finish()
+		.ok_or(miette::miette! {
+			"Unable to retrieve program from Stepper"
+		})?;
 	if options.debug.contains(&Stage::Parser) {
 		debug!("Start ID: {}", out.start);
 		for (nx, node) in out.store.iter() {

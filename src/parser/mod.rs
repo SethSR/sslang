@@ -19,6 +19,8 @@ pub(crate) use operators::{BinaryOp, UnaryOp};
 pub(crate) use node::{Expr, Node, NodeId, NodeStore};
 pub(crate) use parser::ScopeTracker;
 
+pub(crate) use parser::stepper;
+
 pub(crate) type TokenInfo = Range<usize>;
 #[cfg(test)]
 pub(crate) type TypedIdent = (Rc<str>, ValueType);

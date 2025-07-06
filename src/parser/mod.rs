@@ -19,7 +19,7 @@ mod tests;
 pub(crate) use error::Error;
 pub(crate) use node::{Expr, Node, NodeId, NodeStore};
 pub(crate) use operators::{BinaryOp, UnaryOp};
-pub(crate) use parser::ScopeTracker;
+pub(crate) use parser::{ScopeTracker, StepResult};
 pub(crate) use types::{Meet, ValueType, Int, Fix};
 
 pub(crate) use parser::stepper;
@@ -109,10 +109,20 @@ pub fn eval(
 	}
 
 	let mut stepper = stepper(source, &input);
-	while let Some(result) = stepper.step() {
-		match result {
-			Ok(msg) => println!("[step] {msg}"),
-			Err(e) => eprintln!("[erro] {e}"),
+	loop {
+		use parser::StepResult;
+
+		match stepper.step() {
+			StepResult::Ok(msg) => println!("[step] {msg}"),
+			StepResult::Err(e) => eprintln!("[erro] {e}"),
+			StepResult::Fatal(e) => {
+				eprintln!("[exit] {e}");
+				break;
+			}
+			StepResult::Done => {
+				println!("[done] Finished");
+				break;
+			}
 		}
 	}
 

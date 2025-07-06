@@ -32,6 +32,11 @@ pub(crate) type Scope = HashMap<Rc<str>, NodeId>;
 pub(crate) struct ScopeTracker(Vec<Scope>);
 
 #[derive(Debug)]
+enum StackOp {
+	Expr,
+}
+
+#[derive(Debug)]
 pub(super) struct Parser<'a,'b> {
 	input: &'a [Token],
 	source: &'b str,
@@ -43,6 +48,9 @@ pub(super) struct Parser<'a,'b> {
 	pub(super) nodes: NodeStore,
 	pub(super) records: HashSet<Rc<str>>,
 	pub(super) functions: HashSet<Rc<str>>,
+
+	// Stack
+	stack: Vec<StackOp>,
 
 	// DEBUG
 	dbg_depth: usize,
@@ -62,6 +70,8 @@ impl<'a,'b> Parser<'a,'b> {
 			records: HashSet::default(),
 			functions: HashSet::default(),
 
+			stack: vec![StackOp::Expr],
+
 			dbg_depth: 2,
 			dbg_ctx: Context::default(),
 		}
@@ -72,35 +82,58 @@ impl<'a,'b> Parser<'a,'b> {
 	}
 }
 
+pub(crate) enum StepResult {
+	Ok(String),
+	Err(Error),
+	Fatal(Error),
+	Done,
+}
+
+impl Parser<'_,'_> {
+	fn step(
+		&mut self,
+		program: &mut Vec<NodeId>,
+	) -> StepResult {
+		let op = self.stack.pop();
+		match op {
+			Some(StackOp::Expr) => {
+				let nx = match self.expr(0) {
+					Ok(nx) => nx,
+					Err(e) => return StepResult::Err(e),
+				};
+				let node = match self.nodes.get(nx) {
+					Ok(node) => node,
+					Err(e) => return StepResult::Err(Error::Parse(e)),
+				};
+				match &node.expr {
+					Expr::Var { name, ..} |
+					Expr::Fun { name, ..} => {
+						self.scopes.insert(name, nx);
+					}
+					_ => {}
+				}
+				program.push(nx);
+				StepResult::Ok(format!("Pushed top-level expression: '{node}'"))
+			}
+			_ => StepResult::Fatal(self.dbg_ctx.with_msg("empty operation stack")),
+		}
+	}
+}
+
 impl Stepper<'_,'_> {
-	pub fn step(&mut self) -> Option<Result<String>> {
+	pub fn step(&mut self) -> StepResult {
 		let Self { parser, program, start_nx } = self;
 		if parser.peek(0).tt == TokenType::Eof {
 			let scope = match parser.scopes.pop() {
 				Some(scope) => scope,
-				None => return Some(Err(parser.dbg_ctx.with_msg("empty scope-list in `parser::step`"))),
+				None => return StepResult::Err(parser.dbg_ctx.with_msg("empty scope-list in `parser::step`")),
 			};
 			let nx = parser.nodes.new_block(program.clone(), scope, 0..parser.source.len());
 			*start_nx = Some(nx);
-			None
+			StepResult::Done
 		} else {
-			let nx = match parser.expr(0) {
-				Ok(nx) => nx,
-				Err(e) => return Some(Err(e)),
-			};
-			let node = match parser.nodes.get(nx) {
-				Ok(node) => node,
-				Err(e) => return Some(Err(Error::Parse(e))),
-			};
-			match &node.expr {
-				Expr::Var { name, ..} |
-				Expr::Fun { name, ..} => {
-					parser.scopes.insert(name, nx);
-				}
-				_ => {}
-			}
-			program.push(nx);
-			Some(Ok(format!("Pushed top-level expression: '{node}'")))
+			parser.stack.push(StackOp::Expr);
+			parser.step(&mut self.program)
 		}
 	}
 

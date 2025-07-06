@@ -115,10 +115,19 @@ fn main() -> miette::Result<()> {
 
 	info!("parsing");
 	let mut stepper = parser::stepper(source, &tokens);
-	while let Some(result) = stepper.step() {
-		match result {
-			Ok(msg) => println!("[step] {msg}"),
-			Err(e) => eprintln!("[erro] {e}"),
+	loop {
+		use parser::StepResult;
+		match stepper.step() {
+			StepResult::Ok(msg) => println!("[step] {msg}"),
+			StepResult::Err(e) => eprintln!("[erro] {e}"),
+			StepResult::Fatal(e) => {
+				eprintln!("[exit] {e}");
+				break;
+			}
+			StepResult::Done => {
+				println!("[done] Finished");
+				break;
+			}
 		}
 	}
 	let out = stepper.finish()

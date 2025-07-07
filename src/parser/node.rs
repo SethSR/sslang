@@ -24,7 +24,7 @@ impl NodeStore {
 
 impl NodeStore {
 	pub(crate) fn new_block(&mut self, body: Vec<NodeId>, scope: Scope, info: TokenInfo) -> NodeId {
-		println!("Saving block scope: {scope:?}");
+		// println!("Saving block scope: {scope:?}");
 		let kind = body.last()
 			.and_then(|nx| self.data.get(*nx))
 			.and_then(|n| n.as_ref())
@@ -174,10 +174,12 @@ impl NodeStore {
 		Ok(self.add(Node::new(Expr::Phi { lhs, rhs }, kind, start..end)))
 	}
 
-	pub(crate) fn get(&self, nx: NodeId) -> miette::Result<&Node> {
+	pub(crate) fn get(&self, nx: usize) -> miette::Result<&Node> {
 		self.data.get(nx)
 			.and_then(|n| n.as_ref())
-			.ok_or_else(|| miette::miette!("Compiler Error: expression information not found in parser"))
+			.ok_or_else(|| miette::miette! {
+				"Compiler Error: missing node @ index '{nx}'"
+			})
 	}
 
 	pub(crate) fn get_mut(&mut self, nx: NodeId) -> miette::Result<&mut Node> {

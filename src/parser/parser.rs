@@ -11,8 +11,18 @@ use super::{BinaryOp, Error, Expr, Fix, Int, TokenInfo, ValueType};
 use super::error::{Context, Result, error, report};
 use super::node::{NodeId, NodeStore};
 
+pub fn stepper(source: &str, input: &[Token]) -> Stepper {
+	let mut parser = Parser::new(source, input);
+	parser.scopes.push();
+	Stepper {
+		parser,
+		program: vec![],
+		start_nx: None,
+	}
+}
+
 fn eof_error(parser: &Parser, msg: &str) -> Error {
-	report(parser.source, parser.peek(-1).range(), "after here",
+	report(&parser.source, parser.peek(-1).range(), "after here",
 		&format!("Expected {msg}, Found EoF"))
 }
 
@@ -23,7 +33,7 @@ fn expected(parser: &Parser, msg: &str) -> Error {
 			LabeledSpan::at(parser.peek(0).range(), "and here"),
 		],
 		"Expected {msg}, found {}", parser.peek(0)
-	}.with_source_code(parser.source.to_owned()))
+	}.with_source_code(parser.source.to_string()))
 }
 
 pub(crate) type Scope = HashMap<Rc<str>, NodeId>;
@@ -32,36 +42,42 @@ pub(crate) type Scope = HashMap<Rc<str>, NodeId>;
 pub(crate) struct ScopeTracker(Vec<Scope>);
 
 #[derive(Debug)]
-enum StackOp {
+pub(crate) enum StackOp {
 	Expr,
 }
 
 #[derive(Debug)]
-pub(super) struct Parser<'a,'b> {
-	input: &'a [Token],
-	source: &'b str,
+enum StackValue {
+	Rec,
+	NodeId(NodeId),
+}
+
+#[derive(Debug)]
+pub(crate) struct Parser {
+	input: Box<[Token]>,
+	source: Rc<str>,
 	index: usize,
 
-	pub(super) scopes: ScopeTracker,
+	pub(crate) scopes: ScopeTracker,
 
 	// TODO - srenshaw - All of these fields will probably be moved into a Scope structure.
-	pub(super) nodes: NodeStore,
-	pub(super) records: HashSet<Rc<str>>,
-	pub(super) functions: HashSet<Rc<str>>,
+	pub(crate) nodes: NodeStore,
+	pub(crate) records: HashSet<Rc<str>>,
+	pub(crate) functions: HashSet<Rc<str>>,
 
 	// Stack
-	stack: Vec<StackOp>,
+	pub(crate) stack: Vec<StackOp>,
 
 	// DEBUG
 	dbg_depth: usize,
 	dbg_ctx: Context,
 }
 
-impl<'a,'b> Parser<'a,'b> {
-	pub fn new(source: &'b str, input: &'a [Token]) -> Self {
+impl Parser {
+	pub fn new(source: &str, input: &[Token]) -> Self {
 		Self {
-			source,
-			input,
+			source: source.into(),
+			input: input.into(),
 			index: 0,
 
 			scopes: ScopeTracker::default(),
@@ -77,8 +93,11 @@ impl<'a,'b> Parser<'a,'b> {
 		}
 	}
 
+	const EOF: Token = Token { tt: TokenType::Eof, start: 0 };
 	pub fn peek(&self, offset: isize) -> &Token {
-		&self.input[self.index.saturating_add_signed(offset)]
+		self.input.get(self.index.saturating_add_signed(offset))
+			.unwrap_or(&Self::EOF)
+		// &self.input[self.index.saturating_add_signed(offset)]
 	}
 }
 
@@ -89,7 +108,25 @@ pub(crate) enum StepResult {
 	Done,
 }
 
-impl Parser<'_,'_> {
+impl From<&str> for StepResult {
+	fn from(s: &str) -> Self {
+		Self::Ok(s.into())
+	}
+}
+
+impl From<String> for StepResult {
+	fn from(s: String) -> Self {
+		Self::Ok(s)
+	}
+}
+
+impl From<Error> for StepResult {
+	fn from(e: Error) -> Self {
+		Self::Err(e)
+	}
+}
+
+impl Parser {
 	fn step(
 		&mut self,
 		program: &mut Vec<NodeId>,
@@ -97,36 +134,56 @@ impl Parser<'_,'_> {
 		let op = self.stack.pop();
 		match op {
 			Some(StackOp::Expr) => {
-				let nx = match self.expr(0) {
-					Ok(nx) => nx,
-					Err(e) => return StepResult::Err(e),
-				};
-				let node = match self.nodes.get(nx) {
-					Ok(node) => node,
-					Err(e) => return StepResult::Err(Error::Parse(e)),
-				};
-				match &node.expr {
-					Expr::Var { name, ..} |
-					Expr::Fun { name, ..} => {
-						self.scopes.insert(name, nx);
+				use StackValue as SV;
+
+				let mut values = vec![];
+				self.expr2(&mut values);
+				match values.pop() {
+					Some(SV::Rec) => error(&self.source, self.peek(0).range(),
+						"Found RECORD marker - TODO - implement stack-based record parsing").into(),
+					Some(SV::NodeId(nx)) => {
+						let node = match self.nodes.get(nx) {
+							Ok(node) => node,
+							Err(e) => return Error::Parse(e).into(),
+						};
+						match &node.expr {
+							Expr::Var { name, ..} |
+							Expr::Fun { name, ..} => {
+								self.scopes.insert(name, nx);
+							}
+							_ => {}
+						}
+						program.push(nx);
+						format!("Pushed top-level expression: '{node}'").into()
 					}
-					_ => {}
+					None => StepResult::Fatal(error(&self.source, self.peek(0).range(),
+						"Empty value stack")),
 				}
-				program.push(nx);
-				StepResult::Ok(format!("Pushed top-level expression: '{node}'"))
 			}
 			_ => StepResult::Fatal(self.dbg_ctx.with_msg("empty operation stack")),
 		}
 	}
 }
 
-impl Stepper<'_,'_> {
+#[derive(Debug)]
+pub struct Stepper {
+	pub(crate) parser: Parser,
+	pub(crate) program: Vec<NodeId>,
+	start_nx: Option<NodeId>,
+}
+
+impl Stepper {
 	pub fn step(&mut self) -> StepResult {
-		let Self { parser, program, start_nx } = self;
+		let Self {
+			parser,
+			program,
+			start_nx,
+		} = self;
+
 		if parser.peek(0).tt == TokenType::Eof {
 			let scope = match parser.scopes.pop() {
 				Some(scope) => scope,
-				None => return StepResult::Err(parser.dbg_ctx.with_msg("empty scope-list in `parser::step`")),
+				None => return parser.dbg_ctx.with_msg("empty scope-list in `parser::step`").into(),
 			};
 			let nx = parser.nodes.new_block(program.clone(), scope, 0..parser.source.len());
 			*start_nx = Some(nx);
@@ -146,25 +203,6 @@ impl Stepper<'_,'_> {
 			scopes: self.parser.scopes,
 		})
 	}
-}
-
-pub fn stepper<'a,'b>(
-	source: &'b str,
-	input: &'a [Token],
-) -> Stepper<'a,'b> {
-	let mut parser = Parser::new(source, input);
-	parser.scopes.push();
-	Stepper {
-		parser,
-		program: vec![],
-		start_nx: None,
-	}
-}
-
-pub struct Stepper<'a,'b> {
-	parser: Parser<'a,'b>,
-	program: Vec<NodeId>,
-	start_nx: Option<NodeId>,
 }
 
 fn float_to_fixed(n: f64) -> i64 {
@@ -254,7 +292,7 @@ fn log_item<T: std::fmt::Display>(item: T, depth: usize) {
 	debug!("{:>1$}{item}", "> ", depth);
 }
 
-impl Parser<'_,'_> {
+impl Parser {
 	pub(super) fn num(&mut self) -> Result<i64> {
 		with_ctx!(self, "Num", {
 			log("Num", self.dbg_depth);
@@ -307,7 +345,7 @@ impl Parser<'_,'_> {
 			let token_str = token.to_string();
 			let Some(bit_spec) = token_str.strip_prefix(prefix) else {
 				let msg = format!("Parsed as fixed-point type that doesn't start with '{prefix}'");
-				return Err(error(self.source, token.range(), &msg));
+				return Err(error(&self.source, token.range(), &msg));
 			};
 
 			let bits = if bit_spec.is_empty() {
@@ -316,7 +354,7 @@ impl Parser<'_,'_> {
 				bits
 			} else {
 				let msg = format!("Unable to parse '{token}' into fixed-point type");
-				return Err(error(self.source, token.range(), &msg));
+				return Err(error(&self.source, token.range(), &msg));
 			};
 
 			if bits > max_bits {
@@ -355,7 +393,7 @@ impl Parser<'_,'_> {
 		with_ctx!(self, "match_token", {
 			match self.peek(0).tt.clone() {
 				t if t != tt => if t == TokenType::Eof {
-					Err(report(self.source, self.peek(-1).range(), "after here",
+					Err(report(&self.source, self.peek(-1).range(), "after here",
 						&format!("Expected {tt:?}. Found EoF")))
 				} else {
 					Err(expected(self, &format!("{tt:?}")))
@@ -470,12 +508,88 @@ impl Parser<'_,'_> {
 					}
 				}
 			} else {
-				return Err(error(self.source, op_token.range(),
+				return Err(error(&self.source, op_token.range(),
 					&format!("Call to unknown function '{name}'"),
 				));
 			}
 			Ok(self.nodes.new_call(&name, args, lhs_node.info.start..op_token.range().end))
 		})
+	}
+
+	fn expr2(&mut self, values: &mut Vec<StackValue>) -> StepResult {
+		use TokenType as TT;
+
+		let token = self.peek(0);
+		match token.tt {
+			TT::Rec => {
+				let nx = match self.stmt_rec() {
+					Ok(nx) => nx,
+					Err(e) => return e.into(),
+				};
+				// TODO - srenshaw - After we convert this to a stack-based parser, we'll need this marker
+				// to know when to stop pulling items off the value stack and create the RECORD node.
+				values.push(StackValue::Rec);
+				values.push(StackValue::NodeId(nx));
+				"Parsed RECORD declaration".into()
+			}
+			TT::Fun => {
+				let nx = match self.stmt_fn() {
+					Ok(nx) => nx,
+					Err(e) => return StepResult::Err(e),
+				};
+				// TODO - srenshaw - Add an end marker, so when we're pulling things out of the value stack
+				// to add the FUNCTION node, we know when to stop.
+				//
+				// values.push(StackValue::Fun);
+				values.push(StackValue::NodeId(nx));
+				"Parsed FUNCTION declaration".into()
+			}
+			TT::If => {
+				let nx = match self.stmt_if() {
+					Ok(nx) => nx,
+					Err(e) => return StepResult::Err(e),
+				};
+				// TODO - srenshaw - Add an end marker, so when we're pulling things out of the value stack
+				// to add the IF node, we know when to stop.
+				//
+				// values.push(StackValue::If);
+				values.push(StackValue::NodeId(nx));
+				"Parsed IF expression".into()
+			}
+			TT::Var => {
+				let nx = match self.stmt_var() {
+					Ok(nx) => nx,
+					Err(e) => return StepResult::Err(e),
+				};
+				// TODO - srenshaw - Add an end marker, so when we're pulling things out of the value stack
+				// to add the VARIABLE node, we know when to stop.
+				//
+				// values.push(StackValue::Var);
+				values.push(StackValue::NodeId(nx));
+				"Parsed VARIABLE expression".into()
+			}
+			TT::While => {
+				let nx = match self.stmt_while() {
+					Ok(nx) => nx,
+					Err(e) => return StepResult::Err(e),
+				};
+				// TODO - srenshaw - Add an end marker, so when we're pulling things out of the value stack
+				// to add the WHILE node, we know when to stop.
+				//
+				// values.push(StackValue::While);
+				values.push(StackValue::NodeId(nx));
+				"Parsed WHILE expression".into()
+			}
+			_ => {
+				match self.expr(0) {
+					Ok(nx) => {
+						values.push(StackValue::NodeId(nx));
+						"Parsed expression".into()
+					}
+					Err(e) => e.into(),
+				}
+			}
+		}
 	}
 
 	pub(super) fn expr(&mut self, min_bp: u8) -> Result<NodeId> {
@@ -486,9 +600,9 @@ impl Parser<'_,'_> {
 
 			let left_token = self.peek(0);
 			let mut lhs: NodeId = match left_token.tt {
-				TT::Rec => self.stmt_rec()?,
-				TT::Fun => self.stmt_fn()?,
 				TT::If => self.stmt_if()?,
+				TT::Fun => self.stmt_fn()?,
+				TT::Rec => self.stmt_rec()?,
 				TT::Var => self.stmt_var()?,
 				TT::While => self.stmt_while()?,
 
@@ -720,7 +834,7 @@ impl Parser<'_,'_> {
 			self.dbg_depth -= 2;
 
 			if self.records.contains(&name) {
-				return Err(error(self.source, start..end,
+				return Err(error(&self.source, start..end,
 					"A record with this name is already defined"));
 			}
 			self.records.insert(Rc::clone(&name));
@@ -764,7 +878,7 @@ impl Parser<'_,'_> {
 			self.dbg_depth -= 2;
 
 			if self.functions.contains(&name) {
-				return Err(error(self.source, start..end,
+				return Err(error(&self.source, start..end,
 					"A function with this name is already defined"));
 			}
 			self.functions.insert(Rc::clone(&name));
@@ -838,9 +952,9 @@ impl ScopeTracker {
 	}
 
 	fn insert(&mut self, name: &Rc<str>, nx: NodeId) -> NodeId {
-		let index = self.0.len();
+		// let index = self.0.len();
 		if let Some(scope) = self.0.last_mut() {
-			println!("add {name} : {nx} to scope {}", index-1);
+			// println!("add {name} : {nx} to scope {}", index-1);
 			scope.insert(Rc::clone(name), nx);
 			nx
 		} else {
@@ -849,13 +963,13 @@ impl ScopeTracker {
 	}
 
 	fn push(&mut self) {
-		println!("pushing a scope | prev-top {:?}", self.0.last());
+		// println!("pushing a scope | prev-top {:?}", self.0.last());
 		self.0.push(Scope::default());
 	}
 
 	fn pop(&mut self) -> Option<Scope> {
 		let last = self.0.pop();
-		println!("popping a scope | prev-top {last:?}");
+		// println!("popping a scope | prev-top {last:?}");
 		last
 	}
 
@@ -873,7 +987,7 @@ impl ScopeTracker {
 		mut t_scopes: ScopeTracker,
 		mut f_scopes: ScopeTracker,
 	) -> Result<ScopeTracker> {
-		println!("merging scopes");
+		// println!("merging scopes");
 
 		let mut scopes = vec![];
 

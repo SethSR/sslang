@@ -19,7 +19,7 @@ mod tests;
 pub(crate) use error::Error;
 pub(crate) use node::{Expr, Node, NodeId, NodeStore};
 pub(crate) use operators::{BinaryOp, UnaryOp};
-pub(crate) use parser::{ScopeTracker, StepResult};
+pub(crate) use parser::{ScopeTracker, Stepper, StepResult};
 pub(crate) use types::{Meet, ValueType, Int, Fix};
 
 pub(crate) use parser::stepper;
@@ -37,56 +37,57 @@ pub(crate) struct Output {
 	pub(crate) scopes: ScopeTracker,
 }
 
-fn print_nodes(s: usize, nx: NodeId, ns: &NodeStore) {
+pub(crate) fn nodes_to_string(nx: NodeId, ns: &NodeStore, mut padding: usize, out: &mut Vec<String>) {
 	let node = ns.get(nx);
 	match node {
 		Ok(node) => {
-			println!("[{nx:3}] {:>1$}{node}", "> ", s);
+			out.push(format!("[{nx:3}] {:>1$}{node}", "> ", padding));
+			padding += 2;
 			match &node.expr {
 				Expr::Block{body,..} => {
 					for item in body {
-						print_nodes(s + 2, *item, ns);
+						nodes_to_string(*item, ns, padding, out);
 					}
 				}
 				Expr::Fun { body, ..} => {
-					print_nodes(s + 2, *body, ns);
+					nodes_to_string(*body, ns, padding, out);
 				}
 				Expr::Var { body, ..} => {
 					if let Some(item) = body {
-						print_nodes(s + 2, *item, ns);
+						nodes_to_string(*item, ns, padding, out);
 					}
 				}
 				Expr::If { cond, bt, bf } => {
-					print_nodes(s + 2, *cond, ns);
-					print_nodes(s + 2, *bt, ns);
+					nodes_to_string(*cond, ns, padding, out);
+					nodes_to_string(*bt, ns, padding, out);
 					if let Some(bf) = bf {
-						print_nodes(s + 2, *bf, ns);
+						nodes_to_string(*bf, ns, padding, out);
 					}
 				}
 				Expr::While { cond, body } => {
-					print_nodes(s + 2, *cond, ns);
-					print_nodes(s + 2, *body, ns);
+					nodes_to_string(*cond, ns, padding, out);
+					nodes_to_string(*body, ns, padding, out);
 				}
 				Expr::FnCall { args, ..} => {
 					for item in args {
-						print_nodes(s + 2, *item, ns);
+						nodes_to_string(*item, ns, padding, out);
 					}
 				}
 				Expr::Unary { rhs, ..} => {
-					print_nodes(s + 2, *rhs, ns);
+					nodes_to_string(*rhs, ns, padding, out);
 				}
 				Expr::Binary { lhs, rhs, ..} => {
-					print_nodes(s + 2, *lhs, ns);
-					print_nodes(s + 2, *rhs, ns);
+					nodes_to_string(*lhs, ns, padding, out);
+					nodes_to_string(*rhs, ns, padding, out);
 				}
 				Expr::RecInit { field_inits, ..} => {
 					for (_,item) in field_inits {
-						print_nodes(s + 2, *item, ns);
+						nodes_to_string(*item, ns, padding, out);
 					}
 				}
 				Expr::Phi { lhs, rhs } => {
-					print_nodes(s + 2, *lhs, ns);
-					print_nodes(s + 2, *rhs, ns);
+					nodes_to_string(*lhs, ns, padding, out);
+					nodes_to_string(*rhs, ns, padding, out);
 				}
 				Expr::Num(_) => {}
 				Expr::Id(_) => {}
@@ -95,7 +96,7 @@ fn print_nodes(s: usize, nx: NodeId, ns: &NodeStore) {
 			}
 		}
 		Err(e) => {
-			println!("[{nx}] {:>1$}{e}", "> ", s);
+			out.push(format!("[{nx}] {:>1$}ERROR: {e}", "> ", padding));
 		}
 	}
 }
@@ -130,7 +131,10 @@ pub fn eval(
 		miette::bail!("Unable to retrieve output from Parser");
 	};
 
-	print_nodes(2, out.start, &out.store);
+	let mut print_out = vec![];
+	nodes_to_string(out.start, &out.store, 0, &mut print_out);
+	println!("{}", print_out.join("\n"));
+
 	Ok(out)
 }
 

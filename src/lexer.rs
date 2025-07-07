@@ -1,18 +1,21 @@
 
+use std::rc::Rc;
+
 use miette::LabeledSpan;
 
 use crate::tokens::{Token, TokenType};
 
-pub(crate) struct Lexer<'a> {
-	source: &'a str,
-	rest: &'a str,
+pub(crate) struct Lexer {
+	source: Rc<str>,
+	rest: Rc<str>,
 	index: usize,
 }
 
-impl<'a> Lexer<'a> {
-	pub(crate) fn new(input: &'a str) -> Self {
+impl Lexer {
+	pub(crate) fn new(input: &str) -> Self {
+		let input: Rc<str> = input.into();
 		Self {
-			source: input,
+			source: Rc::clone(&input),
 			rest: input,
 			index: 0,
 		}
@@ -20,11 +23,11 @@ impl<'a> Lexer<'a> {
 
 	fn next(&mut self, index: usize) {
 		self.index += index;
-		self.rest = &self.rest[index..];
+		self.rest = self.rest[index..].into();
 	}
 }
 
-impl<'a> Iterator for Lexer<'a> {
+impl Iterator for Lexer {
 	type Item = Result<Token, miette::Error>;
 
 	fn next(&mut self) -> Option<Self::Item> {

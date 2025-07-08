@@ -44,12 +44,19 @@ pub(crate) struct ScopeTracker(Vec<Scope>);
 #[derive(Debug)]
 pub(crate) enum StackOp {
 	Expr,
+	Rec,
+	RecEnd,
+	Param(TokenType),
 }
 
 #[derive(Debug)]
 enum StackValue {
-	Rec,
 	NodeId(NodeId),
+	Ident(Rc<str>, TokenInfo),
+	Param(NodeId, TokenInfo),
+
+	// Placeholders
+	Rec,
 }
 
 #[derive(Debug)]
@@ -67,6 +74,7 @@ pub(crate) struct Parser {
 
 	// Stack
 	pub(crate) stack: Vec<StackOp>,
+	values: Vec<StackValue>,
 
 	// DEBUG
 	dbg_depth: usize,
@@ -87,6 +95,7 @@ impl Parser {
 			functions: HashSet::default(),
 
 			stack: vec![StackOp::Expr],
+			values: vec![],
 
 			dbg_depth: 2,
 			dbg_ctx: Context::default(),
@@ -97,7 +106,6 @@ impl Parser {
 	pub fn peek(&self, offset: isize) -> &Token {
 		self.input.get(self.index.saturating_add_signed(offset))
 			.unwrap_or(&Self::EOF)
-		// &self.input[self.index.saturating_add_signed(offset)]
 	}
 }
 
@@ -139,8 +147,6 @@ impl Parser {
 				let mut values = vec![];
 				self.expr2(&mut values);
 				match values.pop() {
-					Some(SV::Rec) => error(&self.source, self.peek(0).range(),
-						"Found RECORD marker - TODO - implement stack-based record parsing").into(),
 					Some(SV::NodeId(nx)) => {
 						let node = match self.nodes.get(nx) {
 							Ok(node) => node,
@@ -156,10 +162,43 @@ impl Parser {
 						program.push(nx);
 						format!("Pushed top-level expression: '{node}'").into()
 					}
+
+					Some(SV::Rec) => {
+						"RECORD - placeholder until we can remove hybrid expression parser".into()
+					}
+
+					Some(sv @ SV::Ident(..)) |
+					Some(sv @ SV::Param(..)) => {
+						StepResult::Fatal(error(&self.source, self.peek(0).range(),
+							&format!("Unexpected stack-value: '{sv:?}'")))
+					}
+
 					None => StepResult::Fatal(error(&self.source, self.peek(0).range(),
 						"Empty value stack")),
 				}
 			}
+
+			Some(StackOp::Rec) => {
+				match self.rec_start() {
+					Ok(result) => result,
+					Err(e) => e.into(),
+				}
+			}
+
+			Some(StackOp::RecEnd) => {
+				match self.rec_end(program) {
+					Ok(result) => result,
+					Err(e) => e.into(),
+				}
+			}
+
+			Some(StackOp::Param(closing_token)) => {
+				match self.param(closing_token) {
+					Ok(result) => result,
+					Err(e) => e.into(),
+				}
+			}
+
 			_ => StepResult::Fatal(self.dbg_ctx.with_msg("empty operation stack")),
 		}
 	}
@@ -188,8 +227,10 @@ impl Stepper {
 			let nx = parser.nodes.new_block(program.clone(), scope, 0..parser.source.len());
 			*start_nx = Some(nx);
 			StepResult::Done
-		} else {
+		} else if parser.stack.is_empty() {
 			parser.stack.push(StackOp::Expr);
+			parser.step(&mut self.program)
+		} else {
 			parser.step(&mut self.program)
 		}
 	}
@@ -522,15 +563,11 @@ impl Parser {
 		let token = self.peek(0);
 		match token.tt {
 			TT::Rec => {
-				let nx = match self.stmt_rec() {
-					Ok(nx) => nx,
-					Err(e) => return e.into(),
-				};
-				// TODO - srenshaw - After we convert this to a stack-based parser, we'll need this marker
-				// to know when to stop pulling items off the value stack and create the RECORD node.
+				// TODO - srenshaw - Remove this placeholder, once we can remove the hybrid expression
+				// method.
 				values.push(StackValue::Rec);
-				values.push(StackValue::NodeId(nx));
-				"Parsed RECORD declaration".into()
+				self.stack.push(StackOp::Rec);
+				"Begin parsing RECORD declaration".into()
 			}
 			TT::Fun => {
 				let nx = match self.stmt_fn() {
@@ -765,6 +802,33 @@ impl Parser {
 		})
 	}
 
+	fn param(&mut self, closing_token: TokenType) -> Result<StepResult> {
+		if self.peek(0).tt == closing_token {
+			// NOTE - srenshaw - Don't consume the closing token, as that will be handled by the
+			// return-site.
+			return Ok("Finished parsing Parameters".into());
+		}
+
+		let start = self.peek(0).range().start;
+		let fname = self.ident()?;
+
+		self.match_token(TokenType::Colon)?;
+
+		let vt = self.value_type()?;
+		let end = self.peek(-1).range().end;
+
+		if self.peek(0).tt != TokenType::Comma {
+			return Ok("Finished parsing Parameters".into());
+		}
+		self.index += 1;
+
+		let nx = self.nodes.new_id(&fname, vt.clone(), start..end);
+		self.values.push(StackValue::Param(nx, start..end));
+
+		self.stack.push(StackOp::Param(closing_token));
+		Ok(format!("Parsed Parameter '{fname}: {vt}'").into())
+	}
+
 	/// params := ( typed_ident (',' typed_ident)* ','? )?
 	pub(super) fn params(&mut self) -> Vec<(Rc<str>, ValueType, TokenInfo)> {
 		with_ctx!(self, "params", {
@@ -814,6 +878,46 @@ impl Parser {
 			self.dbg_depth -= 2;
 			result
 		})
+	}
+
+	fn rec_start(&mut self) -> Result<StepResult> {
+		self.match_token(TokenType::Rec)?;
+
+		let info = self.peek(0).range();
+		let name = self.ident()?;
+		self.match_token(TokenType::OBrace)?;
+
+		self.values.push(StackValue::Ident(Rc::clone(&name), info));
+		self.stack.push(StackOp::RecEnd);
+		self.stack.push(StackOp::Param(TokenType::CBrace));
+		Ok(format!("Parsed RECORD header for '{name}'").into())
+	}
+
+	fn rec_end(&mut self, program: &mut Vec<NodeId>) -> Result<StepResult> {
+		self.match_token(TokenType::CBrace)?;
+		let mut params = vec![];
+		let mut last_param_info = 0..0;
+		loop {
+			match self.values.pop() {
+				Some(StackValue::Param(nx, info)) => {
+					params.push(nx);
+					last_param_info = info;
+				}
+				Some(StackValue::Ident(name, info)) => {
+					let start = info.start;
+					let end = last_param_info.end;
+					let nx = self.nodes.new_rec(&name, params, start..end);
+					program.push(nx);
+					break Ok(format!("Parsed Record '{name}'").into());
+				}
+
+				Some(StackValue::NodeId(..)) => break Err(self.dbg_ctx.with_msg("unexpected node id while parsing Record")),
+				None => break Err(self.dbg_ctx.with_msg("empty value stack while parsing Record")),
+
+				// Placeholders
+				Some(StackValue::Rec) => {}
+			}
+		}
 	}
 
 	/// rec := 'rec' ident '{' params '}'
@@ -968,9 +1072,10 @@ impl ScopeTracker {
 	}
 
 	fn pop(&mut self) -> Option<Scope> {
-		let last = self.0.pop();
+		// let last = self.0.pop();
 		// println!("popping a scope | prev-top {last:?}");
-		last
+		// last
+		self.0.pop()
 	}
 
 	pub fn find(&self, id: &Rc<str>) -> Option<NodeId> {

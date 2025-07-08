@@ -11,15 +11,6 @@ use super::{BinaryOp, Error, Expr, Fix, Int, TokenInfo, ValueType};
 use super::error::{Context, Result, error, report};
 use super::node::{NodeId, NodeStore};
 
-pub fn stepper(source: &str, input: &[Token]) -> Stepper {
-	let mut parser = Parser::new(source, input);
-	parser.scopes.push();
-	Stepper {
-		parser,
-		program: vec![],
-	}
-}
-
 fn eof_error(parser: &Parser, msg: &str) -> Error {
 	report(&parser.source, parser.peek(-1).range(), "after here",
 		&format!("Expected {msg}, Found EoF"))
@@ -75,6 +66,7 @@ pub(crate) struct Parser {
 	// Stack
 	pub(crate) stack: Vec<StackOp>,
 	values: Vec<StackValue>,
+	pub(crate) ast: Vec<NodeId>,
 
 	// DEBUG
 	dbg_depth: usize,
@@ -83,12 +75,17 @@ pub(crate) struct Parser {
 
 impl Parser {
 	pub fn new(source: &str, input: &[Token]) -> Self {
+		let mut scopes = ScopeTracker::default();
+
+		// create the expression block for the main procedure
+		scopes.push();
+
 		Self {
 			source: source.into(),
 			input: input.into(),
 			index: 0,
 
-			scopes: ScopeTracker::default(),
+			scopes,
 
 			nodes: NodeStore::default(),
 			records: HashSet::default(),
@@ -96,6 +93,7 @@ impl Parser {
 
 			stack: vec![StackOp::Block(TokenType::Eof)],
 			values: vec![],
+			ast: vec![],
 
 			dbg_depth: 2,
 			dbg_ctx: Context::default(),
@@ -135,10 +133,7 @@ impl From<Error> for StepResult {
 }
 
 impl Parser {
-	fn step(
-		&mut self,
-		program: &mut Vec<NodeId>,
-	) -> StepResult {
+	pub(crate) fn step(&mut self) -> StepResult {
 		match self.stack.pop() {
 			Some(StackOp::Expr) => {
 				use StackValue as SV;
@@ -158,7 +153,7 @@ impl Parser {
 							}
 							_ => {}
 						}
-						program.push(nx);
+						self.ast.push(nx);
 						format!("Pushed top-level expression: '{node}'").into()
 					}
 
@@ -185,7 +180,7 @@ impl Parser {
 			}
 
 			Some(StackOp::RecEnd) => {
-				match self.rec_end(program) {
+				match self.rec_end() {
 					Ok(result) => result,
 					Err(e) => e.into(),
 				}
@@ -208,30 +203,18 @@ impl Parser {
 			None => StepResult::Done,
 		}
 	}
-}
-
-#[derive(Debug)]
-pub struct Stepper {
-	pub(crate) parser: Parser,
-	pub(crate) program: Vec<NodeId>,
-}
-
-impl Stepper {
-	pub fn step(&mut self) -> StepResult {
-		self.parser.step(&mut self.program)
-	}
 
 	pub fn finish(mut self) -> Result<super::Output> {
-		let scope = match self.parser.scopes.pop() {
+		let scope = match self.scopes.pop() {
 			Some(scope) => scope,
-			None => return Err(self.parser.dbg_ctx.with_msg("empty scope-list in `Stepper::finish`")),
+			None => return Err(self.dbg_ctx.with_msg("empty scope-list in `Stepper::finish`")),
 		};
 		Ok(super::Output {
-			start: self.parser.nodes.new_block(self.program.clone(), scope, 0..self.parser.source.len()),
-			store: self.parser.nodes,
-			records: self.parser.records,
-			functions: self.parser.functions,
-			scopes: self.parser.scopes,
+			start: self.nodes.new_block(self.ast.clone(), scope, 0..self.source.len()),
+			store: self.nodes,
+			records: self.records,
+			functions: self.functions,
+			scopes: self.scopes,
 		})
 	}
 }
@@ -899,7 +882,7 @@ impl Parser {
 		Ok(format!("Parsed RECORD header for '{name}'").into())
 	}
 
-	fn rec_end(&mut self, program: &mut Vec<NodeId>) -> Result<StepResult> {
+	fn rec_end(&mut self) -> Result<StepResult> {
 		self.match_token(TokenType::CBrace)?;
 		let mut params = vec![];
 		let mut last_param_info = 0..0;
@@ -915,7 +898,7 @@ impl Parser {
 					let nx = self.nodes.new_rec(&name, params, start..end);
 					self.scopes.insert(&name, nx);
 					self.records.insert(Rc::clone(&name));
-					program.push(nx);
+					self.ast.push(nx);
 					break Ok(format!("Parsed Record '{name}'").into());
 				}
 

@@ -11,20 +11,13 @@ mod operators;
 mod parser;
 mod types;
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) use error::Error;
 pub(crate) use node::{Expr, Node, NodeId, NodeStore};
 pub(crate) use operators::{BinaryOp, UnaryOp};
-pub(crate) use parser::{ScopeTracker, Stepper, StepResult};
+pub(crate) use parser::{Parser, ScopeTracker, StepResult};
 pub(crate) use types::{Meet, ValueType, Int, Fix};
 
-pub(crate) use parser::stepper;
-
 pub(crate) type TokenInfo = Range<usize>;
-#[cfg(test)]
-pub(crate) type TypedIdent = (Rc<str>, ValueType);
 
 #[derive(Debug)]
 pub(crate) struct Output {
@@ -99,6 +92,13 @@ pub(crate) fn nodes_to_string(nx: NodeId, ns: &NodeStore, mut padding: usize, ou
 	}
 }
 
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+pub(crate) type TypedIdent = (Rc<str>, ValueType);
+
 #[cfg(test)]
 use crate::tokens::Token;
 
@@ -111,11 +111,9 @@ pub fn eval(
 		miette::bail!("Empty input");
 	}
 
-	let mut stepper = stepper(source, &input);
+	let mut parser = Parser::new(source, &input);
 	loop {
-		use parser::StepResult;
-
-		match stepper.step() {
+		match parser.step() {
 			StepResult::Ok(msg) => println!("[step] {msg}"),
 			StepResult::Err(e) => eprintln!("[erro] {e}"),
 			StepResult::Fatal(e) => {
@@ -129,7 +127,7 @@ pub fn eval(
 		}
 	}
 
-	let out = match stepper.finish() {
+	let out = match parser.finish() {
 		Ok(out) => out,
 		Err(e) => miette::bail!("{e}"),
 	};

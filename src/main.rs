@@ -120,7 +120,7 @@ fn main() -> miette::Result<()> {
 	}
 
 	info!("parsing");
-	let mut stepper = parser::stepper(source, &tokens);
+	let mut stepper = parser::Parser::new(source, &tokens);
 	loop {
 		use parser::StepResult;
 		match stepper.step() {
@@ -178,7 +178,7 @@ use crossterm::{
 enum AppState {
 	Ready,
 	Lexing(lexer::Lexer),
-	Parsing(Option<Box<parser::Stepper>>),
+	Parsing(Option<Box<parser::Parser>>),
 	// Checking(TypeChecker),
 	Done(parser::NodeId, parser::NodeStore),
 }
@@ -270,7 +270,7 @@ impl AppData {
 						AppState::Parsing(None) => {
 							f.render_widget("Missing parser state", chunks[0]);
 						}
-						AppState::Parsing(Some(stepper)) => {
+						AppState::Parsing(Some(parser)) => {
 							let top = Layout::default()
 								.direction(Direction::Horizontal)
 								.margin(1)
@@ -280,10 +280,9 @@ impl AppData {
 								])
 								.split(chunks[0]);
 
-							let node_store = &stepper.parser.nodes;
+							let node_store = &parser.nodes;
 							let node_list = List::new(
-								stepper.program
-									.iter()
+								parser.ast.iter()
 									.rev()
 									.map(|nx| {
 										let node = node_store.get(*nx);
@@ -305,7 +304,7 @@ impl AppData {
 								])
 								.split(top[1]);
 
-							let node_data = stepper.parser.nodes.iter()
+							let node_data = parser.nodes.iter()
 								.map(|(nx,n)| {
 									(nx, &n.expr)
 								})
@@ -316,11 +315,11 @@ impl AppData {
 								.block(Block::default().title("Parser Nodes").borders(Borders::ALL));
 							f.render_widget(nodes, top_right[0]);
 
-							let scopes = Paragraph::new(format!("{:#?}", stepper.parser.scopes))
+							let scopes = Paragraph::new(format!("{:#?}", parser.scopes))
 								.block(Block::default().title("Parser Nodes").borders(Borders::ALL));
 							f.render_widget(scopes, top_right[1]);
 
-							let stack = Paragraph::new(format!("{:#?}", stepper.parser.stack))
+							let stack = Paragraph::new(format!("{:#?}", parser.stack))
 								.block(Block::default().title("Parser Nodes").borders(Borders::ALL));
 							f.render_widget(stack, top_right[2]);
 
@@ -359,7 +358,7 @@ impl AppData {
 											Err(e) => self.status = format!("ERROR: {e:?}"),
 										}
 									}
-									let parser = parser::stepper(&self.source, &self.tokens);
+									let parser = parser::Parser::new(&self.source, &self.tokens);
 									AppState::Parsing(Some(Box::new(parser)))
 								}
 								AppState::Parsing(mut parser) => {
@@ -412,7 +411,7 @@ impl AppData {
 											self.state = AppState::Done(0, parser::NodeStore::default());
 										}
 										None => {
-											let parser = parser::stepper(&self.source, &self.tokens);
+											let parser = parser::Parser::new(&self.source, &self.tokens);
 											self.state = AppState::Parsing(Some(Box::new(parser)));
 										}
 									}

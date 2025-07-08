@@ -134,7 +134,7 @@ pub fn eval(
 
 	let mut print_out = vec![];
 	nodes_to_string(out.start, &out.store, 0, &mut print_out);
-	println!("{}", print_out.join("\n"));
+	eprintln!("{}", print_out.join("\n"));
 
 	Ok(out)
 }

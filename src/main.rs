@@ -275,8 +275,8 @@ impl AppData {
 								.direction(Direction::Horizontal)
 								.margin(1)
 								.constraints([
-									Constraint::Percentage(50),
-									Constraint::Percentage(50),
+									Constraint::Percentage(40),
+									Constraint::Percentage(60),
 								])
 								.split(chunks[0]);
 
@@ -285,22 +285,25 @@ impl AppData {
 								parser.ast.iter()
 									.rev()
 									.map(|nx| {
-										let node = node_store.get(*nx);
-										ListItem::new(format!("{node:?}"))
+										let node = match node_store.get(*nx) {
+											Ok(node) => format!("{node}"),
+											Err(e) => format!("{e}"),
+										};
+										ListItem::new(node)
 									})
 									.collect::<Vec<_>>(),
 							)
-							.block(Block::default().title("AST Nodes").borders(Borders::ALL));
+							.block(Block::default().title("AST").borders(Borders::ALL));
 
 							f.render_widget(node_list, top[0]);
 
 							let top_right = Layout::default()
-								.direction(Direction::Vertical)
+								.direction(Direction::Horizontal)
 								.margin(1)
 								.constraints([
-									Constraint::Percentage(40),
-									Constraint::Percentage(30),
-									Constraint::Percentage(30),
+									Constraint::Ratio(1,3),
+									Constraint::Ratio(1,3),
+									Constraint::Ratio(1,3),
 								])
 								.split(top[1]);
 
@@ -312,15 +315,19 @@ impl AppData {
 									format!("{out}\n[{nx:>3}] {expr}")
 								});
 							let nodes = Paragraph::new(node_data)
-								.block(Block::default().title("Parser Nodes").borders(Borders::ALL));
+								.block(Block::default().title("Nodes").borders(Borders::ALL));
 							f.render_widget(nodes, top_right[0]);
 
 							let scopes = Paragraph::new(format!("{:#?}", parser.scopes))
-								.block(Block::default().title("Parser Nodes").borders(Borders::ALL));
+								.block(Block::default().title("Scopes").borders(Borders::ALL));
 							f.render_widget(scopes, top_right[1]);
 
-							let stack = Paragraph::new(format!("{:#?}", parser.stack))
-								.block(Block::default().title("Parser Nodes").borders(Borders::ALL));
+							let stack_data = parser.stack.iter()
+								.rev()
+								.map(|op| format!("{op:?}"))
+								.collect::<Vec<_>>();
+							let stack = Paragraph::new(stack_data.join("\n"))
+								.block(Block::default().title("Stack").borders(Borders::ALL));
 							f.render_widget(stack, top_right[2]);
 
 							// stepper.program;

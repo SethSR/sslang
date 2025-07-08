@@ -136,10 +136,7 @@ fn main() -> miette::Result<()> {
 			}
 		}
 	}
-	let out = stepper.finish()
-		.ok_or(miette::miette! {
-			"Unable to retrieve program from Stepper"
-		})?;
+	let out = stepper.finish()?;
 	if options.debug.contains(&Stage::Parser) {
 		debug!("Start ID: {}", out.start);
 		for (nx, node) in out.store.iter() {
@@ -383,9 +380,9 @@ impl AppData {
 										}
 
 										match parser.finish() {
-											Some(out) => AppState::Done(out.start, out.store),
-											None => {
-												self.status = "Unable to retrieve program from Stepper".into();
+											Ok(out) => AppState::Done(out.start, out.store),
+											Err(e) => {
+												self.status = format!("[exit] {e}");
 												AppState::Done(0, parser::NodeStore::default())
 											}
 										}
@@ -411,7 +408,7 @@ impl AppData {
 											self.state = AppState::Lexing(lexer);
 										}
 										Some(Err(e)) => {
-											self.status = format!("{e:?}");
+											self.status = format!("[exit] {e}");
 											self.state = AppState::Done(0, parser::NodeStore::default());
 										}
 										None => {
@@ -439,9 +436,9 @@ impl AppData {
 										}
 
 										self.state = match parser.finish() {
-											Some(out) => AppState::Done(out.start, out.store),
-											None => {
-												self.status = "Unable to retieve program from Stepper".into();
+											Ok(out) => AppState::Done(out.start, out.store),
+											Err(e) => {
+												self.status = format!("[exit] {e}");
 												AppState::Done(0, parser::NodeStore::default())
 											}
 										};

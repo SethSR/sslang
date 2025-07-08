@@ -3,8 +3,6 @@ use std::collections::HashSet;
 use std::ops::Range;
 use std::rc::Rc;
 
-use crate::tokens::Token;
-
 #[macro_use]
 mod error;
 mod node;
@@ -101,6 +99,10 @@ pub(crate) fn nodes_to_string(nx: NodeId, ns: &NodeStore, mut padding: usize, ou
 	}
 }
 
+#[cfg(test)]
+use crate::tokens::Token;
+
+#[cfg(test)]
 pub fn eval(
 	source: &str,
 	input: Vec<Token>,
@@ -127,8 +129,9 @@ pub fn eval(
 		}
 	}
 
-	let Some(out) = stepper.finish() else {
-		miette::bail!("Unable to retrieve output from Parser");
+	let out = match stepper.finish() {
+		Ok(out) => out,
+		Err(e) => miette::bail!("{e}"),
 	};
 
 	let mut print_out = vec![];

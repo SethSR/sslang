@@ -17,7 +17,6 @@ pub fn stepper(source: &str, input: &[Token]) -> Stepper {
 	Stepper {
 		parser,
 		program: vec![],
-		start_nx: None,
 	}
 }
 
@@ -43,6 +42,7 @@ pub(crate) struct ScopeTracker(Vec<Scope>);
 
 #[derive(Debug)]
 pub(crate) enum StackOp {
+	Block(TokenType),
 	Expr,
 	Rec,
 	RecEnd,
@@ -94,7 +94,7 @@ impl Parser {
 			records: HashSet::default(),
 			functions: HashSet::default(),
 
-			stack: vec![StackOp::Expr],
+			stack: vec![StackOp::Block(TokenType::Eof)],
 			values: vec![],
 
 			dbg_depth: 2,
@@ -139,8 +139,7 @@ impl Parser {
 		&mut self,
 		program: &mut Vec<NodeId>,
 	) -> StepResult {
-		let op = self.stack.pop();
-		match op {
+		match self.stack.pop() {
 			Some(StackOp::Expr) => {
 				use StackValue as SV;
 
@@ -199,7 +198,14 @@ impl Parser {
 				}
 			}
 
-			_ => StepResult::Fatal(self.dbg_ctx.with_msg("empty operation stack")),
+			Some(StackOp::Block(closing_token)) => {
+				match self.block2(closing_token) {
+					Ok(result) => result,
+					Err(e) => e.into(),
+				}
+			}
+
+			None => StepResult::Done,
 		}
 	}
 }
@@ -208,36 +214,20 @@ impl Parser {
 pub struct Stepper {
 	pub(crate) parser: Parser,
 	pub(crate) program: Vec<NodeId>,
-	start_nx: Option<NodeId>,
 }
 
 impl Stepper {
 	pub fn step(&mut self) -> StepResult {
-		let Self {
-			parser,
-			program,
-			start_nx,
-		} = self;
-
-		if parser.peek(0).tt == TokenType::Eof {
-			let scope = match parser.scopes.pop() {
-				Some(scope) => scope,
-				None => return parser.dbg_ctx.with_msg("empty scope-list in `parser::step`").into(),
-			};
-			let nx = parser.nodes.new_block(program.clone(), scope, 0..parser.source.len());
-			*start_nx = Some(nx);
-			StepResult::Done
-		} else if parser.stack.is_empty() {
-			parser.stack.push(StackOp::Expr);
-			parser.step(&mut self.program)
-		} else {
-			parser.step(&mut self.program)
-		}
+		self.parser.step(&mut self.program)
 	}
 
-	pub fn finish(self) -> Option<super::Output> {
-		Some(super::Output {
-			start: self.start_nx?,
+	pub fn finish(mut self) -> Result<super::Output> {
+		let scope = match self.parser.scopes.pop() {
+			Some(scope) => scope,
+			None => return Err(self.parser.dbg_ctx.with_msg("empty scope-list in `Stepper::finish`")),
+		};
+		Ok(super::Output {
+			start: self.parser.nodes.new_block(self.program.clone(), scope, 0..self.parser.source.len()),
 			store: self.parser.nodes,
 			records: self.parser.records,
 			functions: self.parser.functions,
@@ -802,6 +792,22 @@ impl Parser {
 		})
 	}
 
+	fn block2(&mut self, closing_token: TokenType) -> Result<StepResult> {
+		if self.peek(0).tt == closing_token {
+			// NOTE - srenshaw - Don't consume the closing token, as that will be handled by the
+			// return-site.
+			return Ok("Finished parsing Block".into());
+		}
+
+		// We'll need to return here after we try to parse an expression
+		self.stack.push(StackOp::Block(closing_token));
+
+		// This is the expression we'll attempt to parse
+		self.stack.push(StackOp::Expr);
+
+		Ok("Parsing Expression".into())
+	}
+
 	fn param(&mut self, closing_token: TokenType) -> Result<StepResult> {
 		if self.peek(0).tt == closing_token {
 			// NOTE - srenshaw - Don't consume the closing token, as that will be handled by the
@@ -907,6 +913,8 @@ impl Parser {
 					let start = info.start;
 					let end = last_param_info.end;
 					let nx = self.nodes.new_rec(&name, params, start..end);
+					self.scopes.insert(&name, nx);
+					self.records.insert(Rc::clone(&name));
 					program.push(nx);
 					break Ok(format!("Parsed Record '{name}'").into());
 				}

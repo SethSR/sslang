@@ -52,8 +52,12 @@ fn update_types(
 		}
 
 		Expr::Block { body, scope } => {
+			let scope_nodes: Vec<_> = scope.values().copied().collect();
 			let mut block_scopes = scopes.clone();
 			block_scopes.add(scope);
+			for sx in scope_nodes {
+				update_types(sx, r_store, f_store, &block_scopes, n_store, indent + 2);
+			}
 			for bx in body {
 				update_types(bx, r_store, f_store, &block_scopes, n_store, indent + 2);
 			}

@@ -339,7 +339,10 @@ impl fmt::Display for Expr {
 			Expr::Phi { lhs, rhs }                  => write!(fmt, "(phi {lhs} {rhs})"),
 			Expr::Num(n)                            => write!(fmt, "{n}"),
 			Expr::Id(s)                             => write!(fmt, "{s}"),
-			Expr::Block{body,..}                    => write!(fmt, "{body:?}"),
+			Expr::Block{ body, scope }              => write!(fmt, "{body:?} ({})", scope.keys()
+				.map(|name| name.to_string())
+				.reduce(|out, name| format!("{out},{name}"))
+				.unwrap_or_default()),
 			Expr::RecInit { name, field_inits }     => write!(fmt, "(init {name} {field_inits:?})"),
 			Expr::Unary { op, rhs }                 => write!(fmt, "({op} {rhs})"),
 			Expr::Binary { op, lhs, rhs }           => write!(fmt, "({op} {lhs} {rhs})"),

@@ -28,7 +28,7 @@ fn expected(parser: &Parser, msg: &str) -> Error {
 
 pub(crate) type Scope = HashMap<Rc<str>, NodeId>;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct ScopeTracker(Vec<Scope>);
 
 #[derive(Debug)]
@@ -156,14 +156,24 @@ impl Parser {
 							Err(e) => return Error::Parse(e).into(),
 						};
 						match &node.expr {
-							Expr::Var { name, ..} |
-							Expr::Fun { name, ..} => {
-								self.scopes.insert(name, nx);
-							}
-							_ => {}
+							Expr::Rec {..} |
+							Expr::Var {..} |
+							Expr::Fun {..} => {}
+
+							Expr::Num(_) |
+							Expr::Id(_) |
+							Expr::Bool(_) |
+							Expr::Block {..} |
+							Expr::If {..} |
+							Expr::While {..} |
+							Expr::RecInit {..} |
+							Expr::Unary {..} |
+							Expr::Binary {..} |
+							Expr::FnCall {..} |
+							Expr::Phi {..} => self.values.push(SV::NodeId(nx)),
 						}
 						self.ast.push(nx);
-						format!("Pushed top-level expression: '{node}'").into()
+						format!("Parsed expression: '{node}'").into()
 					}
 
 					Some(SV::Rec) => {
@@ -524,33 +534,56 @@ impl Parser {
 	fn expr_call(&mut self, lhs: NodeId, info: TokenInfo) -> Result<NodeId> {
 		with_ctx!(self, "expr_call", {
 			let lhs_node = self.nodes.get(lhs)?.clone();
-			let name = match lhs_node.expr {
-				Expr::Id(name) => name,
-				_ => return Err(expected(self, "Identifier")),
-			};
+			match lhs_node.expr {
+				Expr::Id(name) => {
+					self.index += 1;
+					let args = self.args().unwrap_or_default();
 
-			self.index += 1;
-			let args = self.args().unwrap_or_default();
-
-			if TokenType::CParen != self.peek(0).tt {
-				return Err(expected(self, ")"));
-			}
-			self.index += 1;
-
-			if self.functions.contains(&name) {
-				if let Some(rx) = self.scopes.find(&name) {
-					let def = self.nodes.get(rx)?;
-					if let Expr::Fun { params,..} = &def.expr {
-						assert_eq!(args.len(), params.len(),
-							"mismatched argument and parameter lists");
+					if self.match_token(TokenType::CParen).is_err() {
+						return Err(expected(self, ")"));
 					}
+
+					if self.functions.contains(&name) {
+						if let Some(rx) = self.scopes.find(&name) {
+							let def = self.nodes.get(rx)?;
+
+							if let Expr::Fun { params, rtype, ..} = &def.expr {
+								assert_eq!(args.len(), params.len(),
+									"mismatched argument and parameter lists");
+								let rtype = rtype.clone();
+								let nx = self.nodes.new_call(&name, args, lhs_node.info.start..info.end);
+								let node = self.nodes.get_mut(nx)
+									.unwrap();
+								node.kind = rtype;
+								return Ok(nx);
+							}
+						}
+					}
+
+					Err(error(&self.source, info,
+						&format!("Call to unknown function '{name}'"),
+					))
 				}
-			} else {
-				return Err(error(&self.source, info,
-					&format!("Call to unknown function '{name}'"),
-				));
+
+				Expr::Fun { name, params, rtype, ..} => {
+					self.index += 1;
+					let args = self.args().unwrap_or_default();
+
+					if self.match_token(TokenType::CParen).is_err() {
+						return Err(expected(self, ")"));
+					}
+
+					assert_eq!(args.len(), params.len(),
+						"mismatched argument and parameter lists");
+					let rtype = rtype.clone();
+					let nx = self.nodes.new_call(&name, args, info);
+					let node = self.nodes.get_mut(nx)
+						.unwrap();
+					node.kind = rtype;
+					Ok(nx)
+				},
+				expr => Err(error(&self.source, lhs_node.info, &format!("BLAH BLAH BLAH - Expected ID, found {expr}"))),
 			}
-			Ok(self.nodes.new_call(&name, args, lhs_node.info.start..info.end))
 		})
 	}
 

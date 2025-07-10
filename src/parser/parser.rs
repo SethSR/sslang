@@ -633,12 +633,12 @@ impl Parser {
 					"Parsed RECORD initializer expression".into()
 				} else if let Some(nx) = self.scopes.find(&s) {
 					values.push(StackValue::NodeId(nx));
-					format!("Parsed scoped IDENTIFIER '{s}' [{nx}]").into()
+					self.index += 1;
+					format!("Parsed IDENTIFIER '{s}' [{nx}]").into()
 				} else {
-					let nx = self.nodes.new_id(&s, ValueType::Any, token.range());
-					values.push(StackValue::NodeId(nx));
-					self.scopes.insert(&s, nx);
-					format!("Parsed new IDENTIFIER '{s}' [{nx}]").into()
+					let info = token.range();
+					self.index += 1;
+					StepResult::Fatal(error(&self.source, info, &format!("Unknown IDENTIFIER '{s}'")))
 				}
 			}
 			_ => {
@@ -1110,7 +1110,7 @@ impl Parser {
 			let name = self.ident()?;
 			let vtype = self.match_token(TokenType::Colon)
 				.and_then(|_| self.value_type())
-				.unwrap_or(ValueType::Unit);
+				.unwrap_or(ValueType::Any);
 			self.match_token(TokenType::Eq1)?;
 			let body = if self.peek(0).tt == TokenType::OBrace {
 				self.scopes.push();
@@ -1160,11 +1160,11 @@ impl Parser {
 
 impl ScopeTracker {
 	/// Used in type-checking (and potentially elsewhere) to re-add block scopes.
-	pub fn add(&mut self, scope: Scope) {
+	pub(crate) fn add(&mut self, scope: Scope) {
 		self.0.push(scope)
 	}
 
-	fn insert(&mut self, name: &Rc<str>, nx: NodeId) -> NodeId {
+	pub(super) fn insert(&mut self, name: &Rc<str>, nx: NodeId) -> NodeId {
 		// let index = self.0.len();
 		if let Some(scope) = self.0.last_mut() {
 			// println!("add {name} : {nx} to scope {}", index-1);
@@ -1175,12 +1175,12 @@ impl ScopeTracker {
 		}
 	}
 
-	fn push(&mut self) {
+	pub(super) fn push(&mut self) {
 		// println!("pushing a scope | prev-top {:?}", self.0.last());
 		self.0.push(Scope::default());
 	}
 
-	fn pop(&mut self) -> Option<Scope> {
+	pub(super) fn pop(&mut self) -> Option<Scope> {
 		// let last = self.0.pop();
 		// println!("popping a scope | prev-top {last:?}");
 		// last

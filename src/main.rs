@@ -42,7 +42,9 @@ fn main() {
 	}
 
 	vmul(p, q)
-}";
+}
+
+main()";
 
 use clap::Parser;
 
@@ -67,13 +69,21 @@ impl From<String> for Stage {
 }
 
 #[derive(Parser)]
-struct Options {
+#[command(version)]
+pub struct Options {
+	/// Runs the compiler in REPL mode.
+	#[arg(long,default_value_t=false)]
+	repl: bool,
+
+	/// List of compiler stages to show debug output for.
 	#[arg(short,long)]
 	debug: Vec<Stage>,
 
+	/// Level of debug output to show.
 	#[arg(short,long,default_value_t=tracing::Level::INFO)]
 	level: tracing::Level,
 
+	/// Outputs with release optimizations.
 	#[arg(short,long,default_value_t=false)]
 	release: bool,
 
@@ -102,12 +112,24 @@ fn main() -> miette::Result<()> {
 		.into_diagnostic()?;
 	*/
 
-	let source = TEST_INPUT;
+	let mut input = String::new();
+	if options.repl {
+		use std::io::{self, Write};
 
-	let app = AppData::new(source);
-	if let Err(e) = app.start() {
-		panic!("{e:?}");
+		println!("ctrl+C to exit");
+		loop {
+			print!("> ");
+			io::stdout().flush().unwrap();
+			input.clear();
+			let _ = io::stdin().read_line(&mut input);
+			let source = input.trim();
+			if let Err(e) = AppData::new(source).start() {
+				panic!("ERR: {e:?}");
+			}
+		}
 	}
+
+	let source = TEST_INPUT;
 
 	info!("lexing");
 	let tokens = lexer::eval(source)?;

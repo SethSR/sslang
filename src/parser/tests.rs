@@ -11,10 +11,17 @@ use super::{
 	UnaryOp,
 	ValueType as VT,
 };
-use super::parser::{Parser, Scope};
+use super::parser::{Parser, Scope, ScopeTracker};
 
-#[derive(Default)]
-struct Tester(NodeId, NodeStore);
+struct Tester(NodeId, NodeStore, ScopeTracker);
+
+impl Default for Tester {
+	fn default() -> Self {
+		let mut scopes = ScopeTracker::default();
+		scopes.add(Scope::default());
+		Self(0, NodeStore::default(), scopes)
+	}
+}
 
 impl Tester {
 	fn finish(mut self) -> Self {
@@ -48,14 +55,19 @@ impl Tester {
 		vtype: VT,
 		body: NodeId,
 	) -> NodeId {
-		self.1.new_var(&name.into(), vtype, Some(body), 0..0)
+		let name = name.into();
+		let nx = self.1.new_var(&name, vtype, Some(body), 0..0);
+		self.2.insert(&name, nx);
+		nx
 	}
 
 	fn block(
 		&mut self,
 		body: &[NodeId],
 	) -> NodeId {
-		self.1.new_block(body.to_vec(), Scope::default(), 0..0)
+		let scope = self.2.pop()
+			.unwrap_or_default();
+		self.1.new_block(body.to_vec(), scope, 0..0)
 	}
 
 	fn fun(
@@ -65,11 +77,14 @@ impl Tester {
 		rtype: VT,
 		body: &[NodeId],
 	) -> NodeId {
+		let name = name.into();
 		let params = params.iter()
 			.map(|(pname, ptype)| self.1.new_id(pname, ptype.clone(), 0..0))
 			.collect();
 		let body = self.block(body);
-		self.1.new_fun(&name.into(), params, rtype, body, 0..0)
+		let nx = self.1.new_fun(&name, params, rtype, body, 0..0);
+		self.2.insert(&name, nx);
+		nx
 	}
 
 	fn rec(
@@ -77,10 +92,13 @@ impl Tester {
 		name: &str,
 		fields: &[TypedIdent],
 	) -> NodeId {
+		let name = name.into();
 		let fields = fields.iter()
 			.map(|(fname, ftype)| self.1.new_id(fname, ftype.clone(), 0..0))
 			.collect();
-		self.1.new_rec(&name.into(), fields, 0..0)
+		let nx = self.1.new_rec(&name, fields, 0..0);
+		self.2.insert(&name, nx);
+		nx
 	}
 
 	fn if_s(
@@ -190,6 +208,7 @@ fn parse_test(
 	let tokens = lexer::eval(input)?;
 	eprintln!("tokens: {tokens:?}");
 	let out = super::eval(input, tokens)?;
+	assert_eq!(out.scopes, tester.2);
 	assert_nodes(out.start, &out.store, tester.0, &tester.1, 0);
 	Ok(())
 }
@@ -306,9 +325,11 @@ fn var_stmt_udt_simple() -> miette::Result<()> {
 #[test]
 fn var_stmt_udt_fncall_empty() -> miette::Result<()> {
 	let mut t = Tester::default();
+	t.2.push();
+	let _ = t.fun("b", &[], VT::Unit, &[]);
 	let a = t.call("b", &[]);
 	t.0 = t.var("a", VT::Unit, a);
-	parse_test("var a = b()", &t.finish())
+	parse_test("fn b() {} var a = b()", &t.finish())
 }
 
 #[test]

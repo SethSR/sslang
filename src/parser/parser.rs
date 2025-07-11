@@ -859,9 +859,9 @@ impl Parser {
 
 	fn block2(&mut self, closing_token: TokenType) -> Result<StepResult> {
 		if self.peek(0).tt == closing_token {
-			let mut body = vec![];
+			let mut body = None;
 			while let Some(StackValue::NodeId(nx)) = self.values.last() {
-				body.push(*nx);
+				body = Some(*nx);
 				self.values.pop();
 			}
 			return if let Some(scope) = self.scopes.pop() {
@@ -932,7 +932,7 @@ impl Parser {
 	}
 
 	/// block := '{' expr* '}'
-	pub(super) fn block(&mut self) -> Result<(Vec<NodeId>, TokenInfo)> {
+	pub(super) fn block(&mut self) -> Result<(Option<NodeId>, TokenInfo)> {
 		with_ctx!(self, "block", {
 			log("Block", self.dbg_depth);
 			self.dbg_depth += 2;
@@ -944,9 +944,9 @@ impl Parser {
 					return Err(e);
 				}
 			}
-			let mut body = Vec::new();
+			let mut body = None;
 			while let Ok(expr) = self.expr(0) {
-				body.push(expr);
+				body = Some(expr);
 			}
 			let result = self.match_token(TokenType::CBrace)
 				.map(|_| {

@@ -23,10 +23,8 @@ impl NodeStore {
 }
 
 impl NodeStore {
-	pub(crate) fn new_block(&mut self, body: Vec<NodeId>, scope: Scope, info: TokenInfo) -> NodeId {
-		// println!("Saving block scope: {scope:?}");
-		let kind = body.last()
-			.and_then(|nx| self.data.get(*nx))
+	pub(crate) fn new_block(&mut self, body: Option<NodeId>, scope: Scope, info: TokenInfo) -> NodeId {
+		let kind = body.and_then(|bx| self.data.get(bx))
 			.and_then(|n| n.as_ref())
 			.map(|n| n.kind.clone())
 			.unwrap_or(ValueType::Unit);
@@ -232,7 +230,7 @@ pub(crate) enum Expr {
 	Id(Rc<str>),
 	Bool(bool),
 	Block {
-		body: Vec<NodeId>,
+		body: Option<NodeId>,
 		scope: Scope,
 	},
 	Rec {
@@ -297,7 +295,7 @@ impl Expr {
 			}
 			Self::Id(_) => false,
 			Self::Block{body,..} => {
-				if let Some(nx) = body.last() {
+				if let Some(nx) = body {
 					store.get(*nx).map(|n| n.expr.is_const(store))
 						.unwrap_or_default()
 				} else {
@@ -339,7 +337,11 @@ impl fmt::Display for Expr {
 			Expr::Phi { lhs, rhs }                  => write!(fmt, "(phi {lhs} {rhs})"),
 			Expr::Num(n)                            => write!(fmt, "{n}"),
 			Expr::Id(s)                             => write!(fmt, "{s}"),
-			Expr::Block{ body, scope }              => write!(fmt, "{body:?} ({})", scope.keys()
+			Expr::Block{ body: None, scope }        => write!(fmt, "[] ({})", scope.keys()
+				.map(|name| name.to_string())
+				.reduce(|out, name| format!("{out},{name}"))
+				.unwrap_or_default()),
+			Expr::Block{ body: Some(bx), scope }    => write!(fmt, "[{bx}] ({})", scope.keys()
 				.map(|name| name.to_string())
 				.reduce(|out, name| format!("{out},{name}"))
 				.unwrap_or_default()),

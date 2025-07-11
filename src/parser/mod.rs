@@ -36,8 +36,8 @@ pub(crate) fn nodes_to_string(nx: NodeId, ns: &NodeStore, mut padding: usize, ou
 			padding += 2;
 			match &node.expr {
 				Expr::Block{body,..} => {
-					for item in body {
-						nodes_to_string(*item, ns, padding, out);
+					if let Some(bx) = body {
+						nodes_to_string(*bx, ns, padding, out);
 					}
 				}
 				Expr::Fun { body, ..} => {

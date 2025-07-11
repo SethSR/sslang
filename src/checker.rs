@@ -58,7 +58,7 @@ fn update_types(
 			for sx in scope_nodes {
 				update_types(sx, r_store, f_store, &block_scopes, n_store, indent + 2);
 			}
-			for bx in body {
+			if let Some(bx) = body {
 				update_types(bx, r_store, f_store, &block_scopes, n_store, indent + 2);
 			}
 		}
@@ -136,7 +136,7 @@ fn update_types(
 					panic!("expected block-type for false-node in IF branch");
 				};
 
-				assert_eq!(tnodes.len(), fnodes.len());
+				assert_eq!(tnodes, fnodes);
 
 				assert_eq!(tnode.kind, fnode.kind, "- IF branches have different types: {} != {}", tnode.kind, fnode.kind);
 			} else {

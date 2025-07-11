@@ -43,20 +43,22 @@ pub(crate) enum StackOp {
 	FunEnd,
 	Var,
 	VarEnd,
+	While,
+	WhileEnd,
 }
 
 #[derive(Debug)]
 enum StackValue {
 	NodeId(NodeId),
-	Block(NodeId),
-	Ident(Rc<str>, u16),
-	Param(NodeId),
+	Ident(Rc<str>),
+	InfoStart(u16),
 	Type(ValueType),
 
 	// Placeholders
 	Rec,
 	Fun,
 	Var,
+	While,
 }
 
 #[derive(Debug)]
@@ -187,11 +189,13 @@ impl Parser {
 					Some(SV::Var) => {
 						"VARIABLE - placeholder until we can remove hybrid expression parser".into()
 					}
+					Some(SV::While) => {
+						"WHILE - placeholder until we can remove hybrid expression parser".into()
+					}
 
-					Some(sv @ SV::Block(..)) |
+					Some(sv @ SV::InfoStart(..)) |
 					Some(sv @ SV::Type(..)) |
-					Some(sv @ SV::Ident(..)) |
-					Some(sv @ SV::Param(..)) => {
+					Some(sv @ SV::Ident(..)) => {
 						StepResult::Fatal(error(&self.source, self.peek(0).range(),
 							&format!("Unexpected stack-value: '{sv:?}'")))
 					}
@@ -248,13 +252,23 @@ impl Parser {
 				Err(e) => e.into(),
 			}
 
+			Some(StackOp::While) => match self.while_start() {
+				Ok(result) => result,
+				Err(e) => e.into(),
+			}
+
+			Some(StackOp::WhileEnd) => match self.while_end() {
+				Ok(result) => result,
+				Err(e) => e.into(),
+			}
+
 			None => StepResult::Done,
 		}
 	}
 
 	pub fn finish(mut self) -> Result<super::Output> {
 		let start = match self.values.pop() {
-			Some(StackValue::Block(start)) => start,
+			Some(StackValue::NodeId(start)) => start,
 			value => return Err(self.dbg_ctx.with_msg(&format!("found value '{value:?}' instead of final block"))),
 		};
 
@@ -641,15 +655,10 @@ impl Parser {
 				"Parsed VARIABLE declaration".into()
 			}
 			TT::While => {
-				let nx = match self.stmt_while() {
-					Ok(nx) => nx,
-					Err(e) => return e.into(),
-				};
-				// TODO - srenshaw - Add an end marker, so when we're pulling things out of the value stack
-				// to add the WHILE node, we know when to stop.
-				//
-				// values.push(StackValue::While);
-				self.values.push(StackValue::NodeId(nx));
+				// TODO - srenshaw - Remove this placeholder, once we can remove the hybrid expression
+				// method.
+				self.values.push(StackValue::While);
+				self.stack.push(StackOp::While);
 				"Parsed WHILE expression".into()
 			}
 			// TODO - srenshaw - Currently we can't parse binary-op expressions that start with an
@@ -878,7 +887,7 @@ impl Parser {
 			}
 			return if let Some(scope) = self.scopes.pop() {
 				let nx = self.nodes.new_block(body, scope, 0..0);
-				self.values.push(StackValue::Block(nx));
+				self.values.push(StackValue::NodeId(nx));
 				Ok("Finished parsing Block".into())
 			} else {
 				Err(self.dbg_ctx.with_msg("empty scope-list in `parser::block2`"))
@@ -914,7 +923,7 @@ impl Parser {
 		}
 
 		let nx = self.nodes.new_id(&fname, vt.clone(), start..end);
-		self.values.push(StackValue::Param(nx));
+		self.values.push(StackValue::NodeId(nx));
 
 		Ok(format!("Parsed Parameter '{fname}: {vt}'").into())
 	}
@@ -977,41 +986,39 @@ impl Parser {
 		let name = self.ident()?;
 		self.match_token(TokenType::OBrace)?;
 
-		self.values.push(StackValue::Ident(Rc::clone(&name), start));
+		let out = format!("Parsed header for RECORD '{name}'");
+		self.values.push(StackValue::Ident(name));
+		self.values.push(StackValue::InfoStart(start));
 		self.stack.push(StackOp::RecEnd);
 		self.stack.push(StackOp::Param(TokenType::CBrace));
-		Ok(format!("Parsed header for RECORD '{name}'").into())
+		Ok(out.into())
 	}
 
 	fn rec_end(&mut self) -> Result<StepResult> {
 		let end = self.peek(0).range().end;
 		self.match_token(TokenType::CBrace)?;
+
 		let mut params = vec![];
-		loop {
-			match self.values.pop() {
-				Some(StackValue::Param(nx)) => {
-					params.push(nx);
-				}
-				Some(StackValue::Ident(name, start)) => {
-					let start = start as usize;
-					let nx = self.nodes.new_rec(&name, params, start..end);
-					self.scopes.insert(&name, nx);
-					self.records.insert(Rc::clone(&name));
-					self.ast.push(nx);
-					break Ok(format!("Parsed RECORD '{name}' [{nx}]").into());
-				}
-
-				Some(StackValue::Block(..)) => break Err(self.dbg_ctx.with_msg("unexpected BLOCK while parsing RECORD")),
-				Some(StackValue::NodeId(..)) => break Err(self.dbg_ctx.with_msg("unexpected node id while parsing RECORD")),
-				Some(StackValue::Type(..)) => break Err(self.dbg_ctx.with_msg("unexpected value-type while parsing RECORD")),
-				None => break Err(self.dbg_ctx.with_msg("empty value stack while parsing RECORD")),
-
-				// Placeholders
-				Some(StackValue::Rec) => {}
-				Some(StackValue::Fun) => {}
-				Some(StackValue::Var) => {}
-			}
+		while let Some(StackValue::NodeId(nx)) = self.values.last() {
+			params.push(*nx);
+			self.values.pop();
 		}
+
+		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+			todo!("Expected INFO value in 'rec_end'");
+		};
+
+		let Some(StackValue::Ident(name)) = self.values.pop() else {
+			todo!("Expected IDENTIFIER value in 'rec_end'");
+		};
+
+		let nx = self.nodes.new_rec(&name, params, start as usize..end);
+
+		let out = format!("Parsed RECORD '{name}' [{nx}]");
+		self.scopes.insert(&name, nx);
+		self.records.insert(name);
+		self.ast.push(nx);
+		Ok(out.into())
 	}
 
 	/// rec := 'rec' ident '{' params '}'
@@ -1049,11 +1056,12 @@ impl Parser {
 		let name = self.ident()?;
 		self.match_token(TokenType::OParen)?;
 
-		self.values.push(StackValue::Ident(Rc::clone(&name), start));
+		let out = format!("Parsed header for FUNCTION '{name}'");
+		self.values.push(StackValue::Ident(name));
+		self.values.push(StackValue::InfoStart(start));
 		self.stack.push(StackOp::FunRet);
 		self.stack.push(StackOp::Param(TokenType::CParen));
-
-		Ok(format!("Parsed header for FUNCTION '{name}'").into())
+		Ok(out.into())
 	}
 
 	fn fun_return(&mut self) -> Result<StepResult> {
@@ -1077,32 +1085,36 @@ impl Parser {
 		let end = self.peek(0).range().end;
 		self.match_token(TokenType::CBrace)?;
 
-		let Some(StackValue::Block(body)) = self.values.pop() else {
-			todo!("expected BLOCK value");
+		let Some(StackValue::NodeId(body)) = self.values.pop() else {
+			todo!("expected NODE_ID value in 'fun_end'");
 		};
 
 		let Some(StackValue::Type(rtype)) = self.values.pop() else {
-			todo!("expected TYPE value");
+			todo!("expected TYPE value in 'fun_end'");
 		};
 
 		let mut params = vec![];
-		while let Some(StackValue::Param(nx)) = self.values.last() {
+		while let Some(StackValue::NodeId(nx)) = self.values.last() {
 			params.push(*nx);
 			self.values.pop();
 		}
 
-		let Some(StackValue::Ident(name, start)) = self.values.pop() else {
-			todo!("expected IDENTIFIER value");
+		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+			todo!("expected INFO value in 'fun_end'");
+		};
+
+		let Some(StackValue::Ident(name)) = self.values.pop() else {
+			todo!("expected IDENTIFIER value in 'fun_end'");
 		};
 
 		let start = start as usize;
 		let nx = self.nodes.new_fun(&name, params, rtype, body, start..end);
 
+		let out = format!("Parsed FUNCTION '{name}' [{nx}]");
 		self.scopes.insert(&name, nx);
-		self.functions.insert(Rc::clone(&name));
+		self.functions.insert(name);
 		self.ast.push(nx);
-
-		Ok(format!("Parsed FUNCTION '{name}' [{nx}]").into())
+		Ok(out.into())
 	}
 
 	/// fn := 'fn' ident '(' params ')' ('->' value_type)? block
@@ -1158,7 +1170,8 @@ impl Parser {
 		if self.match_token(TokenType::OBrace).is_ok() {
 			let out = format!("Parsed header for VARIABLE '{name}'");
 			// Push the header marker.
-			self.values.push(StackValue::Ident(name, start));
+			self.values.push(StackValue::Ident(name));
+			self.values.push(StackValue::InfoStart(start));
 			self.values.push(StackValue::Type(vtype));
 			// Finish parsing the variable after we're done with the block.
 			self.stack.push(StackOp::VarEnd);
@@ -1191,15 +1204,19 @@ impl Parser {
 		let end = self.peek(0).range().end;
 		self.match_token(TokenType::CBrace)?;
 
-		let Some(StackValue::Block(body)) = self.values.pop() else {
-			todo!("Expected BLOCK value in 'var_end'");
+		let Some(StackValue::NodeId(body)) = self.values.pop() else {
+			todo!("Expected NODE_ID value in 'var_end'");
 		};
 
 		let Some(StackValue::Type(vtype)) = self.values.pop() else {
 			todo!("Expected TYPE value in 'var_end'");
 		};
 
-		let Some(StackValue::Ident(name, start)) = self.values.pop() else {
+		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+			todo!("expected INFO value in 'var_end'");
+		};
+
+		let Some(StackValue::Ident(name)) = self.values.pop() else {
 			todo!("Expected IDENTIFIER value in 'var_end'");
 		};
 
@@ -1253,6 +1270,41 @@ impl Parser {
 				Ok(self.nodes.new_var(&name, vtype, Some(body), start..end))
 			}
 		})
+	}
+
+	fn while_start(&mut self) -> Result<StepResult> {
+		let start = self.peek(0).start;
+		self.match_token(TokenType::While)?;
+		let cond = self.expr(0)?;
+		self.match_token(TokenType::OBrace)?;
+
+		self.values.push(StackValue::NodeId(cond));
+		self.values.push(StackValue::InfoStart(start));
+		self.stack.push(StackOp::WhileEnd);
+		self.scopes.push();
+		self.stack.push(StackOp::Block(TokenType::CBrace));
+		Ok("Parsed header for WHILE loop".into())
+	}
+
+	fn while_end(&mut self) -> Result<StepResult> {
+		let end = self.peek(0).range().end;
+		self.match_token(TokenType::CBrace)?;
+
+		let Some(StackValue::NodeId(body)) = self.values.pop() else {
+			todo!("Expected BODY value in 'while_end'");
+		};
+
+		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+			todo!("Expected INFO value in 'while_end'");
+		};
+
+		let Some(StackValue::NodeId(cond)) = self.values.pop() else {
+			todo!("Expected COND value in 'while_end'");
+		};
+
+		let nx = self.nodes.new_while(cond, body, start as usize..end);
+		self.values.push(StackValue::NodeId(nx));
+		Ok("Parsed WHILE loop".into())
 	}
 
 	/// while := 'while' expr block

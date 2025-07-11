@@ -34,6 +34,11 @@ fn main() {
 		y = x
 	}
 
+	while p.x > q.y {
+		var b = 3
+		var x = p.y + 1
+	}
+
 	fn vmul(a:vec, b:vec) -> quat {
 		quat {
 			s: a.x * b.x + a.y * b.y,

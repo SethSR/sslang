@@ -45,6 +45,9 @@ pub(crate) enum StackOp {
 	VarEnd,
 	While,
 	WhileEnd,
+	If,
+	IfElse,
+	IfEnd,
 }
 
 #[derive(Debug)]
@@ -53,12 +56,14 @@ enum StackValue {
 	Ident(Rc<str>),
 	InfoStart(u16),
 	Type(ValueType),
+	Scope(ScopeTracker),
 
 	// Placeholders
 	Rec,
 	Fun,
 	Var,
 	While,
+	If,
 }
 
 #[derive(Debug)]
@@ -192,7 +197,11 @@ impl Parser {
 					Some(SV::While) => {
 						"WHILE - placeholder until we can remove hybrid expression parser".into()
 					}
+					Some(SV::If) => {
+						"IF - placeholder until we can remove hybrid expression parser".into()
+					}
 
+					Some(sv @ SV::Scope(..)) |
 					Some(sv @ SV::InfoStart(..)) |
 					Some(sv @ SV::Type(..)) |
 					Some(sv @ SV::Ident(..)) => {
@@ -258,6 +267,21 @@ impl Parser {
 			}
 
 			Some(StackOp::WhileEnd) => match self.while_end() {
+				Ok(result) => result,
+				Err(e) => e.into(),
+			}
+
+			Some(StackOp::If) => match self.if_start() {
+				Ok(result) => result,
+				Err(e) => e.into(),
+			}
+
+			Some(StackOp::IfElse) => match self.if_else() {
+				Ok(result) => result,
+				Err(e) => e.into(),
+			}
+
+			Some(StackOp::IfEnd) => match self.if_end() {
 				Ok(result) => result,
 				Err(e) => e.into(),
 			}
@@ -518,6 +542,127 @@ impl Parser {
 		})
 	}
 
+	fn if_start(&mut self) -> Result<StepResult> {
+		let start = self.peek(0).start;
+		self.match_token(TokenType::If)?;
+		let cond = self.expr(0)?;
+		self.match_token(TokenType::OBrace)?;
+
+		self.values.push(StackValue::NodeId(cond));
+		self.values.push(StackValue::InfoStart(start));
+		self.values.push(StackValue::Scope(self.scopes.clone()));
+		self.stack.push(StackOp::IfElse);
+		self.stack.push(StackOp::Block(TokenType::CBrace));
+		Ok("Parsed header for IF expression".into())
+	}
+
+	fn if_else(&mut self) -> Result<StepResult> {
+		let end = self.peek(0).range().end;
+		self.match_token(TokenType::CBrace)?;
+		if self.match_token(TokenType::Else).is_ok() {
+			self.match_token(TokenType::OBrace)?;
+
+			let Some(StackValue::NodeId(then_body)) = self.values.pop() else {
+				todo!()
+			};
+			let Some(StackValue::Scope(f_scopes)) = self.values.pop() else {
+				todo!()
+			};
+
+			let t_scopes = self.scopes.clone();
+			self.scopes = f_scopes;
+
+			self.values.push(StackValue::NodeId(then_body));
+			self.values.push(StackValue::Scope(t_scopes));
+			self.stack.push(StackOp::IfEnd);
+			self.stack.push(StackOp::Block(TokenType::CBrace));
+			Ok("Parsed then-branch for IF expression".into())
+		} else {
+			let Some(StackValue::NodeId(then_body)) = self.values.pop() else {
+				todo!()
+			};
+
+			let Some(StackValue::Scope(mut f_scopes)) = self.values.pop() else {
+				todo!()
+			};
+			f_scopes.push();
+
+			let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+				todo!()
+			};
+
+			let Some(StackValue::NodeId(cond)) = self.values.pop() else {
+				todo!()
+			};
+
+			let then_node = self.nodes.get(then_body)?;
+			let Expr::Block { scope: ref t_scope, ..} = then_node.expr else {
+				todo!()
+			};
+
+			let mut t_scopes = self.scopes.clone();
+			t_scopes.add(t_scope.clone());
+
+			self.scopes = ScopeTracker::merge(
+				&mut self.nodes,
+				t_scopes,
+				f_scopes,
+			)?;
+
+			let nx = self.nodes.new_if(cond, then_body, None, start as usize..end);
+			self.values.push(StackValue::NodeId(nx));
+			Ok("Parsed IF expression".into())
+		}
+	}
+
+	fn if_end(&mut self) -> Result<StepResult> {
+		let end = self.peek(0).range().end;
+		self.match_token(TokenType::CBrace)?;
+
+		let Some(StackValue::NodeId(else_body)) = self.values.pop() else {
+			todo!()
+		};
+
+		let Some(StackValue::Scope(mut t_scopes)) = self.values.pop() else {
+			todo!()
+		};
+
+		let Some(StackValue::NodeId(then_body)) = self.values.pop() else {
+			todo!()
+		};
+
+		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+			todo!()
+		};
+
+		let Some(StackValue::NodeId(cond)) = self.values.pop() else {
+			todo!()
+		};
+
+		let else_node = self.nodes.get(else_body)?;
+		let Expr::Block { scope: ref f_scope, ..} = else_node.expr else {
+			todo!()
+		};
+
+		let then_node = self.nodes.get(then_body)?;
+		let Expr::Block { scope: ref t_scope, ..} = then_node.expr else {
+			todo!()
+		};
+
+		t_scopes.add(t_scope.clone());
+		self.scopes.add(f_scope.clone());
+
+		self.scopes = ScopeTracker::merge(
+			&mut self.nodes,
+			t_scopes,
+			self.scopes.clone(),
+		)?;
+
+		let nx = self.nodes.new_if(cond, then_body, Some(else_body), start as usize..end);
+		self.values.push(StackValue::NodeId(nx));
+		Ok("Parsed IF_ELSE expression".into())
+	}
+
 	/// if := 'if' expr block ('else' block)?
 	pub(super) fn stmt_if(&mut self) -> Result<NodeId> {
 		with_ctx!(self, "stmt_if", {
@@ -636,15 +781,10 @@ impl Parser {
 				"Parsed FUNCTION declaration".into()
 			}
 			TT::If => {
-				let nx = match self.stmt_if() {
-					Ok(nx) => nx,
-					Err(e) => return e.into(),
-				};
-				// TODO - srenshaw - Add an end marker, so when we're pulling things out of the value stack
-				// to add the IF node, we know when to stop.
-				//
-				// values.push(StackValue::If);
-				self.values.push(StackValue::NodeId(nx));
+				// TODO - srenshaw - Remove this placeholder, once we can remove the hybrid expression
+				// method.
+				self.values.push(StackValue::If);
+				self.stack.push(StackOp::If);
 				"Parsed IF expression".into()
 			}
 			TT::Var => {

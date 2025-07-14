@@ -1,0 +1,150 @@
+
+WHITESPACE = _{ " " | "\t" | NEWLINE }
+
+COMMENT = _{
+	| "//" ~ ANY* ~ NEWLINE
+	| "/*" ~ ANY* ~ "*/"
+}
+
+main = { SOI ~ expr* ~ EOI }
+
+k_var   = { "var" }
+k_rec   = { "rec" }
+k_fun   = { "fn" }
+k_if    = { "if" }
+k_else  = { "else" }
+k_while = { "while" }
+k_true  = { "true" }
+k_false = { "false" }
+
+c_andb      = { "&" }
+c_andl      = { "&&" }
+c_ref       = { "@" }
+c_bang      = { "!" }
+c_ne        = { "!=" }
+c_orb       = { "|" }
+c_orl       = { "||" }
+c_xorb      = { "^" }
+c_xorl      = { "^^" }
+c_cbrace    = { "}" }
+c_cparen    = { ")" }
+c_colon     = { ":" }
+c_comma     = { "," }
+c_deref     = { "$" }
+c_dot       = { "." }
+c_equal     = { "=" }
+c_eq        = { "==" }
+c_lt        = { "<" }
+c_shl       = { "<<" }
+c_rotl      = { "<|" }
+c_le        = { "<=" }
+c_dash      = { "-" }
+c_obrace    = { "{" }
+c_oparen    = { "(" }
+c_mod       = { "%" }
+c_plus      = { "+" }
+c_gt        = { ">" }
+c_shr       = { ">>" }
+c_rotr      = { "|>" }
+c_ge        = { ">=" }
+c_return    = { "->" }
+c_semicolon = { ";" }
+c_div       = { "/" }
+c_divmod    = { "/%" }
+c_star      = { "*" }
+
+expr = {
+	| expr_var
+	| expr_assign
+	| expr_rec
+	| expr_fun
+	| expr_if
+	| expr_while
+	| expr_rec_init
+	| expr_bool
+}
+
+val_spec = _{ c_colon ~ val_type }
+val_ret  = _{ c_return ~ val_type }
+
+expr_var = {
+	k_var ~ ident ~ val_spec? ~ c_equal ~ expr ~ c_semicolon
+}
+
+expr_assign = { unary ~ c_equal ~ expr ~ c_semicolon }
+
+expr_rec = { k_rec ~ ident ~ c_obrace ~ params ~ c_cbrace }
+
+expr_rec_init = { ident ~ c_obrace ~ field_inits? ~ c_cbrace }
+
+expr_fun = {
+	k_fun ~ ident ~ c_oparen ~ params? ~ c_cparen ~ val_ret? ~ block
+}
+
+expr_if = { k_if ~ expr ~ block ~ (k_else ~ block)? }
+
+expr_while = { k_while ~ expr ~ block }
+
+expr_bool = {
+	expr_bit ~ ((c_andl | c_orl | c_xorl) ~ expr_bit)*
+}
+
+expr_bit = {
+	expr_eq ~ ((c_andb | c_orb | c_xorb) ~ expr_eq)*
+}
+
+expr_eq = { expr_cmp ~ ((c_eq | c_ne) ~ expr_cmp)* }
+
+expr_cmp = {
+	expr_add ~ ((c_lt | c_le | c_gt | c_ge) ~ expr_add)*
+}
+
+expr_add = { expr_mul ~ ((c_plus | c_dash) ~ expr_mul)* }
+
+expr_mul = {
+	expr_shift ~ ((c_star | c_divmod | c_div | c_mod) ~ expr_shift)*
+}
+
+expr_shift = { expr_rot ~ ((c_shl | c_shr) ~ expr_rot)* }
+
+expr_rot = { unary ~ ((c_rotl | c_rotr) ~ unary)* }
+
+unary = {
+	(c_ref | c_deref | c_plus | c_dash | c_bang)? ~ (term | fixed | integer)
+}
+
+term = {
+	call ~ (c_dot ~ call)*
+}
+
+call = {
+	ident ~ (c_oparen ~ args? ~ c_cparen)?
+}
+
+args = { expr ~ (c_comma ~ expr)* ~ c_comma? }
+
+params = { param ~ (c_comma ~ param)* ~ c_comma? }
+
+param = { ident ~ val_spec }
+
+field_inits = { field ~ (c_comma ~ field)* ~ c_comma? }
+
+field = { ident ~ c_colon ~ expr }
+
+val_type = @{
+	| "bool"
+	| "u8" | "u16" | "u32"
+	| "s8" | "s16" | "s32"
+	| "fw" ~ ("1" ~ '0'..'6' | ASCII_NONZERO_DIGIT)?
+	| "fd" ~ ('1'..'2' ~ ASCII_DIGIT | "3" ~ '0'..'2' | ASCII_NONZERO_DIGIT)?
+	| ident
+}
+
+block = { c_obrace ~ expr* ~ c_cbrace }
+
+ident = @{ !ASCII_DIGIT ~ (ASCII_ALPHA | ASCII_DIGIT | "_")+ }
+
+integer = @{ (ASCII_DIGIT | "_")+ }
+
+fixed = @{ integer ~ c_dot ~ (ASCII_DIGIT | "_")* }
+

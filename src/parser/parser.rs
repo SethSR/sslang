@@ -3,12 +3,11 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use miette::{LabeledSpan, IntoDiagnostic, WrapErr};
-use tracing::debug;
 
 use crate::tokens::{Token, TokenType};
 
 use super::{BinaryOp, Error, Expr, Fix, Int, TokenInfo, ValueType};
-use super::error::{Context, Result, error, report};
+use super::error::{Result, error, report};
 use super::node::{NodeId, NodeStore};
 
 fn eof_error(parser: &Parser, msg: &str) -> Error {
@@ -17,7 +16,7 @@ fn eof_error(parser: &Parser, msg: &str) -> Error {
 }
 
 fn expected(parser: &Parser, msg: &str) -> Error {
-	Error::Parse(miette::miette! {
+	Error(miette::miette! {
 		labels = [
 			LabeledSpan::at(parser.peek(-1).range(), "between here"),
 			LabeledSpan::at(parser.peek(0).range(), "and here"),
@@ -48,10 +47,11 @@ pub(crate) enum StackOp {
 	If,
 	IfElse,
 	IfEnd,
+	BinaryOp(BinaryOp),
 }
 
 #[derive(Debug)]
-enum StackValue {
+pub(crate) enum StackValue {
 	NodeId(NodeId),
 	Ident(Rc<str>),
 	InfoStart(u16),
@@ -68,9 +68,9 @@ enum StackValue {
 
 #[derive(Debug)]
 pub(crate) struct Parser {
-	input: Box<[Token]>,
-	source: Rc<str>,
-	index: usize,
+	pub(crate) input: Box<[Token]>,
+	pub(crate) source: Rc<str>,
+	pub(crate) index: usize,
 
 	pub(crate) scopes: ScopeTracker,
 
@@ -81,12 +81,8 @@ pub(crate) struct Parser {
 
 	// Stack
 	pub(crate) stack: Vec<StackOp>,
-	values: Vec<StackValue>,
+	pub(crate) values: Vec<StackValue>,
 	pub(crate) ast: Vec<NodeId>,
-
-	// DEBUG
-	dbg_depth: usize,
-	dbg_ctx: Context,
 }
 
 impl Parser {
@@ -110,9 +106,6 @@ impl Parser {
 			stack: vec![StackOp::Block(TokenType::Eof)],
 			values: vec![],
 			ast: vec![],
-
-			dbg_depth: 2,
-			dbg_ctx: Context::default(),
 		}
 	}
 
@@ -148,77 +141,82 @@ impl From<Error> for StepResult {
 	}
 }
 
+impl<S: AsRef<str>> From<Result<S>> for StepResult {
+	fn from(res: Result<S>) -> Self {
+		match res {
+			Ok(s) => s.as_ref().into(),
+			Err(e) => e.into(),
+		}
+	}
+}
+
 impl Parser {
 	pub(crate) fn step(&mut self) -> StepResult {
 		match self.stack.pop() {
-			Some(StackOp::Expr) => {
-				use StackValue as SV;
+			// Some(StackOp::Expr) => {
+			// 	use StackValue as SV;
+			//
+			// 	match self.values.pop() {
+			// 		Some(SV::NodeId(nx)) => {
+			// 			let node = match self.nodes.get(nx) {
+			// 				Ok(node) => node,
+			// 				Err(e) => return Error::Parse(e).into(),
+			// 			};
+			// 			match &node.expr {
+			// 				Expr::Rec {..} |
+			// 				Expr::Var {..} |
+			// 				Expr::Fun {..} => {}
+			//
+			// 				Expr::Num(_) |
+			// 				Expr::Id(_) |
+			// 				Expr::Bool(_) |
+			// 				Expr::Block {..} |
+			// 				Expr::If {..} |
+			// 				Expr::While {..} |
+			// 				Expr::RecInit {..} |
+			// 				Expr::Unary {..} |
+			// 				Expr::Binary {..} |
+			// 				Expr::FnCall {..} |
+			// 				Expr::Phi {..} => self.values.push(SV::NodeId(nx)),
+			// 			}
+			// 			self.ast.push(nx);
+			// 			format!("Parsed expression: '{node}'").into()
+			// 		}
+			//
+			// 		Some(SV::Rec) => {
+			// 			"RECORD - placeholder until we can remove hybrid expression parser".into()
+			// 		}
+			// 		Some(SV::Fun) => {
+			// 			"FUNCTION - placeholder until we can remove hybrid expression parser".into()
+			// 		}
+			// 		Some(SV::Var) => {
+			// 			"VARIABLE - placeholder until we can remove hybrid expression parser".into()
+			// 		}
+			// 		Some(SV::While) => {
+			// 			"WHILE - placeholder until we can remove hybrid expression parser".into()
+			// 		}
+			// 		Some(SV::If) => {
+			// 			"IF - placeholder until we can remove hybrid expression parser".into()
+			// 		}
+			//
+			// 		Some(sv @ SV::Scope(..)) |
+			// 		Some(sv @ SV::InfoStart(..)) |
+			// 		Some(sv @ SV::Type(..)) |
+			// 		Some(sv @ SV::Ident(..)) => {
+			// 			StepResult::Fatal(error(&self.source, self.peek(0).range(),
+			// 				&format!("Unexpected stack-value: '{sv:?}'")))
+			// 		}
+			//
+			// 		None => StepResult::Fatal(error(&self.source, self.peek(0).range(),
+			// 			"Empty value stack")),
+			// 	}
+			// }
 
-				if let StepResult::Err(e) = self.expr2() {
-					return e.into();
-				}
+			Some(StackOp::Expr) => self.expr2(),
 
-				match self.values.pop() {
-					Some(SV::NodeId(nx)) => {
-						let node = match self.nodes.get(nx) {
-							Ok(node) => node,
-							Err(e) => return Error::Parse(e).into(),
-						};
-						match &node.expr {
-							Expr::Rec {..} |
-							Expr::Var {..} |
-							Expr::Fun {..} => {}
-
-							Expr::Num(_) |
-							Expr::Id(_) |
-							Expr::Bool(_) |
-							Expr::Block {..} |
-							Expr::If {..} |
-							Expr::While {..} |
-							Expr::RecInit {..} |
-							Expr::Unary {..} |
-							Expr::Binary {..} |
-							Expr::FnCall {..} |
-							Expr::Phi {..} => self.values.push(SV::NodeId(nx)),
-						}
-						self.ast.push(nx);
-						format!("Parsed expression: '{node}'").into()
-					}
-
-					Some(SV::Rec) => {
-						"RECORD - placeholder until we can remove hybrid expression parser".into()
-					}
-					Some(SV::Fun) => {
-						"FUNCTION - placeholder until we can remove hybrid expression parser".into()
-					}
-					Some(SV::Var) => {
-						"VARIABLE - placeholder until we can remove hybrid expression parser".into()
-					}
-					Some(SV::While) => {
-						"WHILE - placeholder until we can remove hybrid expression parser".into()
-					}
-					Some(SV::If) => {
-						"IF - placeholder until we can remove hybrid expression parser".into()
-					}
-
-					Some(sv @ SV::Scope(..)) |
-					Some(sv @ SV::InfoStart(..)) |
-					Some(sv @ SV::Type(..)) |
-					Some(sv @ SV::Ident(..)) => {
-						StepResult::Fatal(error(&self.source, self.peek(0).range(),
-							&format!("Unexpected stack-value: '{sv:?}'")))
-					}
-
-					None => StepResult::Fatal(error(&self.source, self.peek(0).range(),
-						"Empty value stack")),
-				}
-			}
-
-			Some(StackOp::Rec) => {
-				match self.rec_start() {
-					Ok(result) => result,
-					Err(e) => e.into(),
-				}
+			Some(StackOp::Rec) => match self.rec_start() {
+				Ok(result) => result,
+				Err(e) => e.into(),
 			}
 
 			Some(StackOp::RecEnd) => match self.rec_end() {
@@ -286,6 +284,25 @@ impl Parser {
 				Err(e) => e.into(),
 			}
 
+			Some(StackOp::BinaryOp(op)) => {
+				let Some(StackValue::NodeId(right)) = self.values.pop() else {
+					return StepResult::Err(error(&*self.source, self.peek(0).range(), "missing right-operand for BINARY-OP"));
+				};
+				let Some(StackValue::NodeId(left)) = self.values.pop() else {
+					return StepResult::Err(error(&*self.source, self.peek(0).range(), "missing left-operand for BINARY-OP"));
+				};
+				let end = self.nodes.get(right)
+					.map(|n| n.info.end)
+					.expect("unable to get right-operand token-info");
+				let start = self.nodes.get(left)
+					.map(|n| n.info.start)
+					.expect("unable to get left-operand token-info");
+				let nx = self.nodes.new_binary(op, left, right, start..end)
+					.expect("unable to create new BINARY-OP");
+				self.values.push(StackValue::NodeId(nx));
+				"Parsed BINARY-OP".into()
+			}
+
 			None => StepResult::Done,
 		}
 	}
@@ -293,7 +310,7 @@ impl Parser {
 	pub fn finish(mut self) -> Result<super::Output> {
 		let start = match self.values.pop() {
 			Some(StackValue::NodeId(start)) => start,
-			value => return Err(self.dbg_ctx.with_msg(&format!("found value '{value:?}' instead of final block"))),
+			value => return Err(error(&*self.source, self.peek(0).range(), &format!("found value '{value:?}' instead of final block"))),
 		};
 
 		Ok(super::Output {
@@ -385,161 +402,122 @@ fn prefix_binding_power(tt: &TokenType) -> Option<u8> {
 	}
 }
 
-fn log(s: &str, depth: usize) {
-	debug!("{:>1$}{s}", "| ", depth);
-}
-
-fn log_item<T: std::fmt::Display>(item: T, depth: usize) {
-	debug!("{:>1$}{item}", "> ", depth);
-}
-
 impl Parser {
 	pub(super) fn num(&mut self) -> Result<i64> {
-		with_ctx!(self, "Num", {
-			log("Num", self.dbg_depth);
-			self.dbg_depth += 2;
-			let out = match self.peek(0).tt.clone() {
-				TokenType::Integer(s) => {
-					self.index += 1;
-					Ok(s.parse::<i64>()
-						.into_diagnostic()?)
-				}
-				TokenType::Fixed(s) => {
-					self.index += 1;
-					Ok(float_to_fixed(s
-						.chars()
-						.filter(|c| *c != '_')
-						.collect::<String>()
-						.parse::<f64>()
-						.into_diagnostic()
-						.wrap_err("lexer should not allow invalid fixed-point values")?))
-				}
-				TokenType::Eof => Err(eof_error(self, "Number")),
-				_ => Err(expected(self, "Number")),
-			};
-			self.dbg_depth -= 2;
-			out
-		})
+		let out = match self.peek(0).tt.clone() {
+			TokenType::Integer(s) => {
+				self.index += 1;
+				Ok(s.parse::<i64>()
+					.into_diagnostic()?)
+			}
+			TokenType::Fixed(s) => {
+				self.index += 1;
+				Ok(float_to_fixed(s
+					.chars()
+					.filter(|c| *c != '_')
+					.collect::<String>()
+					.parse::<f64>()
+					.into_diagnostic()
+					.wrap_err("lexer should not allow invalid fixed-point values")?))
+			}
+			TokenType::Eof => Err(eof_error(self, "Number")),
+			_ => Err(expected(self, "Number")),
+		};
+		out
 	}
 
 	pub(super) fn ident(&mut self) -> Result<Rc<str>> {
-		with_ctx!(self, "Ident", {
-			log("Ident", self.dbg_depth);
-			self.dbg_depth += 2;
-			let out = match self.peek(0).tt.clone() {
-				TokenType::Ident(s) => {
-					log_item(&s, self.dbg_depth);
-					self.index += 1;
-					Ok(s)
-				}
-				TokenType::Eof => Err(eof_error(self, "Identifier")),
-				_ => Err(expected(self, "Identifier")),
-			};
-			self.dbg_depth -= 2;
-			out
-		})
+		let out = match self.peek(0).tt.clone() {
+			TokenType::Ident(s) => {
+				self.index += 1;
+				Ok(s)
+			}
+			TokenType::Eof => Err(eof_error(self, "Identifier")),
+			_ => Err(expected(self, "Identifier")),
+		};
+		out
 	}
 
 	pub(super) fn parse_fixed_point(&mut self, prefix: &str, max_bits: u8) -> Result<u8> {
-		with_ctx!(self, "parse_fixed_point", {
-			let token = self.peek(0);
-			let token_str = token.to_string();
-			let Some(bit_spec) = token_str.strip_prefix(prefix) else {
-				let msg = format!("Parsed as fixed-point type that doesn't start with '{prefix}'");
-				return Err(error(&self.source, token.range(), &msg));
-			};
+		let token = self.peek(0);
+		let token_str = token.to_string();
+		let Some(bit_spec) = token_str.strip_prefix(prefix) else {
+			let msg = format!("Parsed as fixed-point type that doesn't start with '{prefix}'");
+			return Err(error(&self.source, token.range(), &msg));
+		};
 
-			let bits = if bit_spec.is_empty() {
-				max_bits / 2
-			} else if let Ok(bits) = bit_spec.parse::<u8>() {
-				bits
-			} else {
-				let msg = format!("Unable to parse '{token}' into fixed-point type");
-				return Err(error(&self.source, token.range(), &msg));
-			};
+		let bits = if bit_spec.is_empty() {
+			max_bits / 2
+		} else if let Ok(bits) = bit_spec.parse::<u8>() {
+			bits
+		} else {
+			let msg = format!("Unable to parse '{token}' into fixed-point type");
+			return Err(error(&self.source, token.range(), &msg));
+		};
 
-			if bits > max_bits {
-				return Err(expected(self, &format!("Bit specifier between 0..={max_bits}")));
-			}
+		if bits > max_bits {
+			return Err(expected(self, &format!("Bit specifier between 0..={max_bits}")));
+		}
 
-			Ok(bits)
-		})
+		Ok(bits)
 	}
 
 	pub(super) fn value_type(&mut self) -> Result<ValueType> {
-		with_ctx!(self, "value_type", {
-			log("ValueType", self.dbg_depth);
-			self.dbg_depth += 2;
-			let token = self.peek(0).clone();
-			let result = match token.tt {
-				TokenType::U8  => Ok(ValueType::to_u8()),
-				TokenType::U16 => Ok(ValueType::to_u16()),
-				TokenType::U32 => Ok(ValueType::to_u32()),
-				TokenType::S8  => Ok(ValueType::to_s8()),
-				TokenType::S16 => Ok(ValueType::to_s16()),
-				TokenType::S32 => Ok(ValueType::to_s32()),
-				TokenType::F16(_) => self.parse_fixed_point("fw", 16).map(ValueType::to_f16),
-				TokenType::F32(_) => self.parse_fixed_point("fd", 32).map(ValueType::to_f32),
-				TokenType::Ident(ref s) => Ok(ValueType::Udt(Rc::clone(s))),
-				_ => Err(expected(self, "Value Type")),
-			};
-			self.index += 1;
-			log_item(&token, self.dbg_depth);
-			self.dbg_depth -= 2;
-			result
-		})
+		let token = self.peek(0).clone();
+		let result = match token.tt {
+			TokenType::U8  => Ok(ValueType::to_u8()),
+			TokenType::U16 => Ok(ValueType::to_u16()),
+			TokenType::U32 => Ok(ValueType::to_u32()),
+			TokenType::S8  => Ok(ValueType::to_s8()),
+			TokenType::S16 => Ok(ValueType::to_s16()),
+			TokenType::S32 => Ok(ValueType::to_s32()),
+			TokenType::F16(_) => self.parse_fixed_point("fw", 16).map(ValueType::to_f16),
+			TokenType::F32(_) => self.parse_fixed_point("fd", 32).map(ValueType::to_f32),
+			TokenType::Ident(ref s) => Ok(ValueType::Udt(Rc::clone(s))),
+			_ => Err(expected(self, "Value Type")),
+		};
+		self.index += 1;
+		result
 	}
 
 	pub(super) fn match_token(&mut self, tt: TokenType) -> Result<()> {
-		with_ctx!(self, "match_token", {
-			match self.peek(0).tt.clone() {
-				t if t != tt => if t == TokenType::Eof {
-					Err(report(&self.source, self.peek(-1).range(), "after here",
-						&format!("Expected {tt:?}. Found EoF")))
-				} else {
-					Err(expected(self, &format!("{tt:?}")))
-				}
-				_ => {
-					self.index += 1;
-					Ok(())
-				}
+		match self.peek(0).tt.clone() {
+			t if t != tt => if t == TokenType::Eof {
+				Err(report(&self.source, self.peek(-1).range(), "after here",
+					&format!("Expected {tt:?}. Found EoF")))
+			} else {
+				Err(expected(self, &format!("{tt:?}")))
 			}
-		})
+			_ => {
+				self.index += 1;
+				Ok(())
+			}
+		}
 	}
 
 	pub(super) fn ident_typed(&mut self) -> Result<(Rc<str>, ValueType, TokenInfo)> {
-		with_ctx!(self, "ident_typed", {
-			log("TypedIdent", self.dbg_depth);
-			self.dbg_depth += 2;
-			let start = self.peek(0).range().start;
-			let result = self.ident()
-				.and_then(|id| self.match_token(TokenType::Colon).map(|_| id))
-				.and_then(|id| self.value_type().map(|vt| {
-					let end = self.peek(-1).range().end;
-					(Rc::clone(&id), vt, start..end)
-				}));
-			self.dbg_depth -= 2;
-			result
-		})
+		let start = self.peek(0).range().start;
+		let result = self.ident()
+			.and_then(|id| self.match_token(TokenType::Colon).map(|_| id))
+			.and_then(|id| self.value_type().map(|vt| {
+				let end = self.peek(-1).range().end;
+				(Rc::clone(&id), vt, start..end)
+			}));
+		result
 	}
 
 	/// args := (expr (',' expr)* ','?)?
 	pub(super) fn args(&mut self) -> Option<Vec<NodeId>> {
-		with_ctx!(self, "args", {
-			log("Args", self.dbg_depth);
-			self.dbg_depth += 2;
-			let first = self.expr(0)
-				.ok()?;
-			let mut out = vec![first];
-			while let Ok(next) = self.match_token(TokenType::Comma)
-				.and_then(|_| self.expr(0))
-			{
-				out.push(next);
-			}
-			let _ = self.match_token(TokenType::Comma);
-			self.dbg_depth -= 2;
-			Some(out)
-		})
+		let first = self.expr(0)
+			.ok()?;
+		let mut out = vec![first];
+		while let Ok(next) = self.match_token(TokenType::Comma)
+			.and_then(|_| self.expr(0))
+		{
+			out.push(next);
+		}
+		let _ = self.match_token(TokenType::Comma);
+		Some(out)
 	}
 
 	fn if_start(&mut self) -> Result<StepResult> {
@@ -563,10 +541,10 @@ impl Parser {
 			self.match_token(TokenType::OBrace)?;
 
 			let Some(StackValue::NodeId(then_body)) = self.values.pop() else {
-				todo!()
+				return Err(error(&*self.source, self.peek(0).range(), "Expected NODE-ID value in 'if_else'"));
 			};
 			let Some(StackValue::Scope(f_scopes)) = self.values.pop() else {
-				todo!()
+				return Err(error(&*self.source, self.peek(0).range(), "Expected SCOPE value in 'if_else'"));
 			};
 
 			let t_scopes = self.scopes.clone();
@@ -579,25 +557,25 @@ impl Parser {
 			Ok("Parsed then-branch for IF expression".into())
 		} else {
 			let Some(StackValue::NodeId(then_body)) = self.values.pop() else {
-				todo!()
+				return Err(error(&*self.source, self.peek(0).range(), "Expected NODE-ID value in 'if_else'"));
 			};
 
 			let Some(StackValue::Scope(mut f_scopes)) = self.values.pop() else {
-				todo!()
+				return Err(error(&*self.source, self.peek(0).range(), "Expected SCOPE value in 'if_else'"));
 			};
 			f_scopes.push();
 
 			let Some(StackValue::InfoStart(start)) = self.values.pop() else {
-				todo!()
+				return Err(error(&*self.source, self.peek(0).range(), "Expected INFO value in 'if_else'"));
 			};
 
 			let Some(StackValue::NodeId(cond)) = self.values.pop() else {
-				todo!()
+				return Err(error(&*self.source, self.peek(0).range(), "Expected NODE-ID value in 'if_else'"));
 			};
 
 			let then_node = self.nodes.get(then_body)?;
 			let Expr::Block { scope: ref t_scope, ..} = then_node.expr else {
-				todo!()
+				return Err(error(&*self.source, self.peek(0).range(), "Expected BLOCK expression in 'if_else'"));
 			};
 
 			let mut t_scopes = self.scopes.clone();
@@ -620,33 +598,33 @@ impl Parser {
 		self.match_token(TokenType::CBrace)?;
 
 		let Some(StackValue::NodeId(else_body)) = self.values.pop() else {
-			todo!()
+			return Err(error(&*self.source, self.peek(0).range(), "Expected NODE-ID value in 'if_end'"));
 		};
 
 		let Some(StackValue::Scope(mut t_scopes)) = self.values.pop() else {
-			todo!()
+			return Err(error(&*self.source, self.peek(0).range(), "Expected SCOPE value in 'if_end'"));
 		};
 
 		let Some(StackValue::NodeId(then_body)) = self.values.pop() else {
-			todo!()
+			return Err(error(&*self.source, self.peek(0).range(), "Expected NODE-ID value in 'if_end'"));
 		};
 
 		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
-			todo!()
+			return Err(error(&*self.source, self.peek(0).range(), "Expected INFO value in 'if_end'"));
 		};
 
 		let Some(StackValue::NodeId(cond)) = self.values.pop() else {
-			todo!()
+			return Err(error(&*self.source, self.peek(0).range(), "Expected NODE-ID value in 'if_end'"));
 		};
 
 		let else_node = self.nodes.get(else_body)?;
 		let Expr::Block { scope: ref f_scope, ..} = else_node.expr else {
-			todo!()
+			return Err(error(&*self.source, self.peek(0).range(), "Expected BLOCK expression in 'if_end'"));
 		};
 
 		let then_node = self.nodes.get(then_body)?;
 		let Expr::Block { scope: ref t_scope, ..} = then_node.expr else {
-			todo!()
+			return Err(error(&*self.source, self.peek(0).range(), "Expected BLOCK expression in 'if_end'"));
 		};
 
 		t_scopes.add(t_scope.clone());
@@ -665,100 +643,93 @@ impl Parser {
 
 	/// if := 'if' expr block ('else' block)?
 	pub(super) fn stmt_if(&mut self) -> Result<NodeId> {
-		with_ctx!(self, "stmt_if", {
-			log("If", self.dbg_depth);
-			self.dbg_depth += 2;
-			let start = self.peek(0).range().start;
-			self.match_token(TokenType::If)?;
-			let cond = self.expr(0)?;
+		let start = self.peek(0).range().start;
+		self.match_token(TokenType::If)?;
+		let cond = self.expr(0)?;
 
-			let f_scopes = self.scopes.clone();
+		let f_scopes = self.scopes.clone();
 
-			let bt = {
-				self.scopes.push();
-				let (body, info) = self.block()?;
-				let scope = self.scopes.pop()
-					.ok_or_else(|| self.dbg_ctx.with_msg("empty scope-list in `parser::stmt_if::true_block`"))?;
-				self.nodes.new_block(body, scope, info)
-			};
-			let t_scopes = self.scopes.clone();
+		let bt = {
+			self.scopes.push();
+			let (body, info) = self.block()?;
+			let scope = self.scopes.pop()
+				.ok_or_else(|| error(&*self.source, self.peek(0).range(), "empty scope-list in `parser::stmt_if::true_block`"))?;
+			self.nodes.new_block(body, scope, info)
+		};
+		let t_scopes = self.scopes.clone();
 
-			self.scopes = f_scopes;
-			let bf = if self.match_token(TokenType::Else).is_ok() {
-				self.scopes.push();
-				let (body, info) = self.block()?;
-				let scope = self.scopes.pop()
-					.ok_or_else(|| self.dbg_ctx.with_msg("empty scope-list in `parser::stmt_if::false_block`"))?;
-				Some(self.nodes.new_block(body, scope, info))
-			} else {
-				None
-			};
+		self.scopes = f_scopes;
+		let bf = if self.match_token(TokenType::Else).is_ok() {
+			self.scopes.push();
+			let (body, info) = self.block()?;
+			let scope = self.scopes.pop()
+				.ok_or_else(|| error(&*self.source, self.peek(0).range(), "empty scope-list in `parser::stmt_if::false_block`"))?;
+			Some(self.nodes.new_block(body, scope, info))
+		} else {
+			None
+		};
 
-			self.scopes = ScopeTracker::merge(
-				&mut self.nodes,
-				t_scopes,
-				self.scopes.clone())?;
+		self.scopes = ScopeTracker::merge(
+			&mut self.nodes,
+			t_scopes,
+			self.scopes.clone())?;
 
-			let end = self.peek(-1).range().end;
-			self.dbg_depth -= 2;
-			Ok(self.nodes.new_if(cond, bt, bf, start..end))
-		})
+		let end = self.peek(-1).range().end;
+		Ok(self.nodes.new_if(cond, bt, bf, start..end))
 	}
 
 	fn expr_call(&mut self, lhs: NodeId, info: TokenInfo) -> Result<NodeId> {
-		with_ctx!(self, "expr_call", {
-			let lhs_node = self.nodes.get(lhs)?.clone();
-			match lhs_node.expr {
-				Expr::Id(name) => {
-					self.index += 1;
-					let args = self.args().unwrap_or_default();
+		let lhs_node = self.nodes.get(lhs)?.clone();
+		match lhs_node.expr {
+			Expr::Id(name) => {
+				self.index += 1;
+				let args = self.args().unwrap_or_default();
 
-					if self.match_token(TokenType::CParen).is_err() {
-						return Err(expected(self, ")"));
-					}
-
-					if self.functions.contains(&name) {
-						if let Some(rx) = self.scopes.find(&name) {
-							let def = self.nodes.get(rx)?;
-
-							if let Expr::Fun { params, rtype, ..} = &def.expr {
-								assert_eq!(args.len(), params.len(),
-									"mismatched argument and parameter lists");
-								let rtype = rtype.clone();
-								let nx = self.nodes.new_call(&name, args, lhs_node.info.start..info.end);
-								let node = self.nodes.get_mut(nx)
-									.unwrap();
-								node.kind = rtype;
-								return Ok(nx);
-							}
-						}
-					}
-
-					Err(error(&self.source, info,
-						&format!("Call to unknown function '{name}'"),
-					))
+				if self.match_token(TokenType::CParen).is_err() {
+					return Err(expected(self, ")"));
 				}
 
-				Expr::Fun { name, params, rtype, ..} => {
-					self.index += 1;
-					let args = self.args().unwrap_or_default();
+				if self.functions.contains(&name) {
+					if let Some(rx) = self.scopes.find(&name) {
+						let def = self.nodes.get(rx)?;
 
-					if self.match_token(TokenType::CParen).is_err() {
-						return Err(expected(self, ")"));
+						if let Expr::Fun { params, rtype, ..} = &def.expr {
+							assert_eq!(args.len(), params.len(),
+								"mismatched argument and parameter lists");
+							let rtype = rtype.clone();
+							let nx = self.nodes.new_call(&name, args, lhs_node.info.start..info.end);
+							let node = self.nodes.get_mut(nx)
+								.unwrap();
+							node.kind = rtype;
+							return Ok(nx);
+						}
 					}
+				}
 
-					assert_eq!(args.len(), params.len(),
-						"mismatched argument and parameter lists");
-					let rtype = rtype.clone();
-					let nx = self.nodes.new_call(&name, args, info);
-					let node = self.nodes.get_mut(nx)
-						.unwrap();
-					node.kind = rtype;
-					Ok(nx)
-				},
-				expr => Err(error(&self.source, lhs_node.info, &format!("BLAH BLAH BLAH - Expected ID, found {expr}"))),
+				Err(error(&self.source, info,
+					&format!("Call to unknown function '{name}'"),
+				))
 			}
-		})
+
+			Expr::Fun { name, params, rtype, ..} => {
+				self.index += 1;
+				let args = self.args().unwrap_or_default();
+
+				if self.match_token(TokenType::CParen).is_err() {
+					return Err(expected(self, ")"));
+				}
+
+				assert_eq!(args.len(), params.len(),
+					"mismatched argument and parameter lists");
+				let rtype = rtype.clone();
+				let nx = self.nodes.new_call(&name, args, info);
+				let node = self.nodes.get_mut(nx)
+					.unwrap();
+				node.kind = rtype;
+				Ok(nx)
+			},
+			expr => Err(error(&self.source, lhs_node.info, &format!("BLAH BLAH BLAH - Expected ID, found {expr}"))),
+		}
 	}
 
 	fn expr2(&mut self) -> StepResult {
@@ -826,6 +797,8 @@ impl Parser {
 					self.values.push(StackValue::NodeId(nx));
 					"Parsed RECORD initializer expression".into()
 				} else if let Some(nx) = self.scopes.find(&s) {
+					self.stack.push(StackOp::Expr);
+
 					self.values.push(StackValue::NodeId(nx));
 					self.index += 1;
 					format!("Parsed IDENTIFIER '{s}' [{nx}]").into()
@@ -835,187 +808,193 @@ impl Parser {
 					StepResult::Fatal(error(&self.source, info, &format!("Unknown IDENTIFIER '{s}'")))
 				}
 			}
+
+			TT::Eq1 => {
+				self.index += 1;
+				self.stack.push(StackOp::BinaryOp(BinaryOp::Assign));
+				self.stack.push(StackOp::Expr);
+				"Parsing ASSIGN expression".into()
+			}
+
+			TT::OBrace => {
+				"Found '{'".into()
+			}
+			TT::CBrace => {
+				"Found '}'".into()
+			}
+			TT::OParen => {
+				"Found '('".into()
+			}
+			TT::CParen => {
+				"Found ')'".into()
+			}
+
 			_ => {
-				match self.expr(0) {
-					Ok(nx) => {
-						self.values.push(StackValue::NodeId(nx));
-						"Parsed expression".into()
-					}
-					Err(e) => e.into(),
-				}
+				format!("Found TOKEN '{token}'\n{self:?}").into()
+				// match self.expr(0) {
+				// 	Ok(nx) => {
+				// 		self.values.push(StackValue::NodeId(nx));
+				// 		"Parsed expression".into()
+				// 	}
+				// 	Err(e) => e.into(),
+				// }
 			}
 		}
 	}
 
 	pub(super) fn expr(&mut self, min_bp: u8) -> Result<NodeId> {
-		with_ctx!(self, "expr", {
-			log("Expr", self.dbg_depth);
-			self.dbg_depth += 2;
-			use TokenType as TT;
+		use TokenType as TT;
 
-			let left_token = self.peek(0);
-			let mut lhs: NodeId = match left_token.tt {
-				TT::If => self.stmt_if()?,
-				TT::Fun => self.stmt_fn()?,
-				TT::Rec => self.stmt_rec()?,
-				TT::Var => self.stmt_var()?,
-				TT::While => self.stmt_while()?,
+		let left_token = self.peek(0);
+		let mut lhs: NodeId = match left_token.tt {
+			TT::If => self.stmt_if()?,
+			TT::Fun => self.stmt_fn()?,
+			TT::Rec => self.stmt_rec()?,
+			TT::Var => self.stmt_var()?,
+			TT::While => self.stmt_while()?,
 
-				TT::True => {
+			TT::True => {
+				let token = left_token.clone();
+				self.index += 1;
+				self.nodes.new_bool(true, token.range())
+			}
+			TT::False => {
+				let token = left_token.clone();
+				self.index += 1;
+				self.nodes.new_bool(false, token.range())
+			}
+
+			TT::Ident(ref s) => {
+				if self.peek(1).tt == TT::OBrace && self.peek(3).tt == TT::Colon {
+					self.expr_rec_init()?
+				} else {
 					let token = left_token.clone();
+					let s = Rc::clone(s);
 					self.index += 1;
-					self.nodes.new_bool(true, token.range())
-				}
-				TT::False => {
-					let token = left_token.clone();
-					self.index += 1;
-					self.nodes.new_bool(false, token.range())
-				}
-
-				TT::Ident(ref s) => {
-					if self.peek(1).tt == TT::OBrace && self.peek(3).tt == TT::Colon {
-						self.expr_rec_init()?
+					if let Some(nx) = self.scopes.find(&s) {
+						nx
 					} else {
-						let token = left_token.clone();
-						let s = Rc::clone(s);
-						self.index += 1;
-						if let Some(nx) = self.scopes.find(&s) {
-							nx
-						} else {
-							let nx = self.nodes.new_id(&s, ValueType::Any, token.range());
-							self.scopes.insert(&s, nx)
-						}
+						let nx = self.nodes.new_id(&s, ValueType::Any, token.range());
+						self.scopes.insert(&s, nx)
 					}
 				}
+			}
 
-				TT::Integer(_) => {
-					let token = left_token.clone();
-					let num = self.num()?;
-					self.nodes.new_num(num, ValueType::Int(Int::Bot), token.range())
+			TT::Integer(_) => {
+				let token = left_token.clone();
+				let num = self.num()?;
+				self.nodes.new_num(num, ValueType::Int(Int::Bot), token.range())
+			}
+
+			TT::Fixed(_) => {
+				let token = left_token.clone();
+				let num = self.num()?;
+				self.nodes.new_num(num, ValueType::Fix(Fix::Bot), token.range())
+			}
+
+			TT::OParen => {
+				self.index += 1;
+				let lhs = self.expr(0)?;
+				if TT::CParen != self.peek(0).tt {
+					return Err(expected(self, ")"));
 				}
+				self.index += 1;
+				lhs
+			}
 
-				TT::Fixed(_) => {
-					let token = left_token.clone();
-					let num = self.num()?;
-					self.nodes.new_num(num, ValueType::Fix(Fix::Bot), token.range())
-				}
+			TT::Plus |
+			TT::Minus |
+			TT::Dollar |
+			TT::At |
+			TT::Bang => {
+				let Some(r_bp) = prefix_binding_power(&self.peek(0).tt) else {
+					return Err(expected(self, "Unary Operator"));
+				};
+				let token = left_token.clone();
+				self.index += 1;
+				let rhs = self.expr(r_bp)?;
+				self.nodes.new_unary((&token.tt).try_into()?, rhs, token.range())
+					.map_err(|err| err.with_source_code(self.source.to_string()))?
+			}
 
-				TT::OParen => {
-					self.index += 1;
-					let lhs = self.expr(0)?;
-					if TT::CParen != self.peek(0).tt {
-						return Err(expected(self, ")"));
-					}
-					self.index += 1;
-					lhs
-				}
+			TT::Eof => return Err(eof_error(self, "Identifier, Function Call, or Literal")),
 
-				TT::Plus |
-				TT::Minus |
-				TT::Dollar |
-				TT::At |
-				TT::Bang => {
-					let Some(r_bp) = prefix_binding_power(&self.peek(0).tt) else {
-						return Err(expected(self, "Unary Operator"));
-					};
-					let token = left_token.clone();
-					self.index += 1;
-					let rhs = self.expr(r_bp)?;
-					self.nodes.new_unary((&token.tt).try_into()?, rhs, token.range())
-						.map_err(|err| err.with_source_code(self.source.to_string()))?
-				}
+			_ => return Err(expected(self, "Identifier, Function Call, or Literal")),
+		};
 
-				TT::Eof => return Err(eof_error(self, "Identifier, Function Call, or Literal")),
-
-				_ => return Err(expected(self, "Identifier, Function Call, or Literal")),
-			};
-
-			loop {
-				let op_token = self.peek(0).clone();
-				if matches!(op_token.tt,
-					TT::Ident(_) | TT::Integer(_) | TT::Fixed(_) |
-					TT::If | TT::Else | TT::While |
-					TT::Fun | TT::Rec | TT::Var |
-					TT::U8 | TT::U16 | TT::U32 |
-					TT::S8 | TT::S16 | TT::S32 |
-					TT::F16(_) | TT::F32(_) |
-					TT::OBrace |
-					TT::Colon | TT::CBrace | TT::CParen |
-					TT::Eof) {
-					break;
-				}
-
-				if TT::OParen == op_token.tt {
-					lhs = self.expr_call(lhs, op_token.range())?;
-					continue;
-				}
-
-				if let Some((l_bp,r_bp)) = infix_binding_power(&op_token.tt) {
-					if l_bp < min_bp {
-						break;
-					}
-
-					self.index += 1;
-					let op: BinaryOp = (&op_token.tt).try_into()?;
-					let rhs = self.expr(r_bp)?;
-					lhs = self.nodes.new_binary(op, lhs, rhs, op_token.range())?;
-					continue;
-				}
-
+		loop {
+			let op_token = self.peek(0).clone();
+			if matches!(op_token.tt,
+				TT::Ident(_) | TT::Integer(_) | TT::Fixed(_) |
+				TT::If | TT::Else | TT::While |
+				TT::Fun | TT::Rec | TT::Var |
+				TT::U8 | TT::U16 | TT::U32 |
+				TT::S8 | TT::S16 | TT::S32 |
+				TT::F16(_) | TT::F32(_) |
+				TT::OBrace |
+				TT::Colon | TT::CBrace | TT::CParen |
+				TT::Eof) {
 				break;
 			}
 
-			log_item(self.nodes.get(lhs)?, self.dbg_depth);
-			self.dbg_depth -= 2;
-			Ok(lhs)
-		})
+			if TT::OParen == op_token.tt {
+				lhs = self.expr_call(lhs, op_token.range())?;
+				continue;
+			}
+
+			if let Some((l_bp,r_bp)) = infix_binding_power(&op_token.tt) {
+				if l_bp < min_bp {
+					break;
+				}
+
+				self.index += 1;
+				let op: BinaryOp = (&op_token.tt).try_into()?;
+				let rhs = self.expr(r_bp)?;
+				lhs = self.nodes.new_binary(op, lhs, rhs, op_token.range())?;
+				continue;
+			}
+
+			break;
+		}
+
+		Ok(lhs)
 	}
 
 	/// field_init := ident ':' (block | expr)
 	fn field_init(&mut self) -> Result<(Rc<str>, NodeId)> {
-		with_ctx!(self, "field_init", {
-			log("FieldInit", self.dbg_depth);
-			self.dbg_depth += 2;
-			let id = self.ident()?;
-			self.match_token(TokenType::Colon)?;
-			let body = if self.peek(1).tt == TokenType::OBrace {
-				self.scopes.push();
-				let (body, info) = self.block()?;
-				let scope = self.scopes.pop()
-					.ok_or_else(|| self.dbg_ctx.with_msg("empty scope-list in `parser::field_init`"))?;
-				self.nodes.new_block(body, scope, info)
-			} else {
-				self.expr(0)?
-			};
-			self.dbg_depth -= 2;
-			Ok((id, body))
-		})
+		let id = self.ident()?;
+		self.match_token(TokenType::Colon)?;
+		let body = if self.peek(1).tt == TokenType::OBrace {
+			self.scopes.push();
+			let (body, info) = self.block()?;
+			let scope = self.scopes.pop()
+				.ok_or_else(|| error(&*self.source, self.peek(0).range(), "empty scope-list in `parser::field_init`"))?;
+			self.nodes.new_block(body, scope, info)
+		} else {
+			self.expr(0)?
+		};
+		Ok((id, body))
 	}
 
 	/// expr_rec_init := ident '{' field_init* '}'
 	pub(super) fn expr_rec_init(&mut self) -> Result<NodeId> {
-		with_ctx!(self, "expr_rec_init", {
-			log("RecInit", self.dbg_depth);
-			self.dbg_depth += 2;
-			let start = self.peek(0).range().start;
-			let id = self.ident()?;
-			self.match_token(TokenType::OBrace)?;
-			let mut fields = vec![];
-			if let Ok(first) = self.field_init() {
-				fields.push(first);
+		let start = self.peek(0).range().start;
+		let id = self.ident()?;
+		self.match_token(TokenType::OBrace)?;
+		let mut fields = vec![];
+		if let Ok(first) = self.field_init() {
+			fields.push(first);
 
-				while let Ok(field) = self.match_token(TokenType::Comma)
-					.and_then(|_| self.field_init())
-				{
-					fields.push(field);
-				}
-				let _ = self.match_token(TokenType::Comma);
+			while let Ok(field) = self.match_token(TokenType::Comma)
+				.and_then(|_| self.field_init())
+			{
+				fields.push(field);
 			}
-			self.match_token(TokenType::CBrace)?;
-			let end = self.peek(-1).range().end;
-			self.dbg_depth -= 2;
-			Ok(self.nodes.new_rec_init(&id, fields, start..end))
-		})
+			let _ = self.match_token(TokenType::Comma);
+		}
+		self.match_token(TokenType::CBrace)?;
+		let end = self.peek(-1).range().end;
+		Ok(self.nodes.new_rec_init(&id, fields, start..end))
 	}
 
 	fn block2(&mut self, closing_token: TokenType) -> Result<StepResult> {
@@ -1030,7 +1009,7 @@ impl Parser {
 				self.values.push(StackValue::NodeId(nx));
 				Ok("Finished parsing Block".into())
 			} else {
-				Err(self.dbg_ctx.with_msg("empty scope-list in `parser::block2`"))
+				Err(error(&*self.source, self.peek(0).range(), "empty scope-list in `parser::block2`"))
 			};
 		}
 
@@ -1070,53 +1049,40 @@ impl Parser {
 
 	/// params := ( typed_ident (',' typed_ident)* ','? )?
 	pub(super) fn params(&mut self) -> Vec<(Rc<str>, ValueType, TokenInfo)> {
-		with_ctx!(self, "params", {
-			log("Params", self.dbg_depth);
-			self.dbg_depth += 2;
+		let Ok(first) = self.ident_typed() else {
+			return vec![];
+		};
 
-			let Ok(first) = self.ident_typed() else {
-				self.dbg_depth -= 2;
-				return vec![];
-			};
+		let mut out = vec![first];
+		while let Ok(id) = self.match_token(TokenType::Comma)
+			.and_then(|_| self.ident_typed())
+		{
+			out.push(id);
+		}
 
-			let mut out = vec![first];
-			while let Ok(id) = self.match_token(TokenType::Comma)
-				.and_then(|_| self.ident_typed())
-			{
-				out.push(id);
-			}
-
-			let _ = self.match_token(TokenType::Comma);
-			self.dbg_depth -= 2;
-			out
-		})
+		let _ = self.match_token(TokenType::Comma);
+		out
 	}
 
 	/// block := '{' expr* '}'
 	pub(super) fn block(&mut self) -> Result<(Option<NodeId>, TokenInfo)> {
-		with_ctx!(self, "block", {
-			log("Block", self.dbg_depth);
-			self.dbg_depth += 2;
-			let start = self.peek(0).range().start;
-			match self.match_token(TokenType::OBrace) {
-				Ok(_) => {},
-				Err(e) => {
-					self.dbg_depth -= 2;
-					return Err(e);
-				}
+		let start = self.peek(0).range().start;
+		match self.match_token(TokenType::OBrace) {
+			Ok(_) => {},
+			Err(e) => {
+				return Err(e);
 			}
-			let mut body = None;
-			while let Ok(expr) = self.expr(0) {
-				body = Some(expr);
-			}
-			let result = self.match_token(TokenType::CBrace)
-				.map(|_| {
-					let end = self.peek(-1).range().end;
-					(body, start..end)
-				});
-			self.dbg_depth -= 2;
-			result
-		})
+		}
+		let mut body = None;
+		while let Ok(expr) = self.expr(0) {
+			body = Some(expr);
+		}
+		let result = self.match_token(TokenType::CBrace)
+			.map(|_| {
+				let end = self.peek(-1).range().end;
+				(body, start..end)
+			});
+		result
 	}
 
 	fn rec_start(&mut self) -> Result<StepResult> {
@@ -1145,11 +1111,11 @@ impl Parser {
 		}
 
 		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
-			todo!("Expected INFO value in 'rec_end'");
+			return Err(error(&*self.source, self.peek(0).range(), "Expected INFO value in 'rec_end'"));
 		};
 
 		let Some(StackValue::Ident(name)) = self.values.pop() else {
-			todo!("Expected IDENTIFIER value in 'rec_end'");
+			return Err(error(&*self.source, self.peek(0).range(), "Expected IDENTIFIER value in 'rec_end'"));
 		};
 
 		let nx = self.nodes.new_rec(&name, params, start as usize..end);
@@ -1163,31 +1129,26 @@ impl Parser {
 
 	/// rec := 'rec' ident '{' params '}'
 	pub(super) fn stmt_rec(&mut self) -> Result<NodeId> {
-		with_ctx!(self, "stmt_rec", {
-			log("Record", self.dbg_depth);
-			self.dbg_depth += 2;
-			let start = self.peek(0).range().start;
-			self.match_token(TokenType::Rec)?;
-			let name = self.ident()?;
-			self.match_token(TokenType::OBrace)?;
-			let fields = self.params()
-				.into_iter()
-				.map(|(fname, ftype, finfo)| self.nodes.new_id(&fname, ftype, finfo))
-				.collect();
-			self.match_token(TokenType::CBrace)?;
-			let end = self.peek(-1).range().end;
-			self.dbg_depth -= 2;
+		let start = self.peek(0).range().start;
+		self.match_token(TokenType::Rec)?;
+		let name = self.ident()?;
+		self.match_token(TokenType::OBrace)?;
+		let fields = self.params()
+			.into_iter()
+			.map(|(fname, ftype, finfo)| self.nodes.new_id(&fname, ftype, finfo))
+			.collect();
+		self.match_token(TokenType::CBrace)?;
+		let end = self.peek(-1).range().end;
 
-			if self.records.contains(&name) {
-				return Err(error(&self.source, start..end,
-					"A record with this name is already defined"));
-			}
-			self.records.insert(Rc::clone(&name));
+		if self.records.contains(&name) {
+			return Err(error(&self.source, start..end,
+				"A record with this name is already defined"));
+		}
+		self.records.insert(Rc::clone(&name));
 
-			let nx = self.nodes.new_rec(&name, fields, start..end);
-			self.scopes.insert(&name, nx);
-			Ok(nx)
-		})
+		let nx = self.nodes.new_rec(&name, fields, start..end);
+		self.scopes.insert(&name, nx);
+		Ok(nx)
 	}
 
 	fn fun_start(&mut self) -> Result<StepResult> {
@@ -1226,11 +1187,11 @@ impl Parser {
 		self.match_token(TokenType::CBrace)?;
 
 		let Some(StackValue::NodeId(body)) = self.values.pop() else {
-			todo!("expected NODE_ID value in 'fun_end'");
+			return Err(error(&*self.source, self.peek(0).range(), "expected NODE_ID value in 'fun_end'"));
 		};
 
 		let Some(StackValue::Type(rtype)) = self.values.pop() else {
-			todo!("expected TYPE value in 'fun_end'");
+			return Err(error(&*self.source, self.peek(0).range(), "expected TYPE value in 'fun_end'"));
 		};
 
 		let mut params = vec![];
@@ -1240,11 +1201,11 @@ impl Parser {
 		}
 
 		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
-			todo!("expected INFO value in 'fun_end'");
+			return Err(error(&*self.source, self.peek(0).range(), "expected INFO value in 'fun_end'"));
 		};
 
 		let Some(StackValue::Ident(name)) = self.values.pop() else {
-			todo!("expected IDENTIFIER value in 'fun_end'");
+			return Err(error(&*self.source, self.peek(0).range(), "expected IDENTIFIER value in 'fun_end'"));
 		};
 
 		let start = start as usize;
@@ -1259,44 +1220,39 @@ impl Parser {
 
 	/// fn := 'fn' ident '(' params ')' ('->' value_type)? block
 	pub(super) fn stmt_fn(&mut self) -> Result<NodeId> {
-		with_ctx!(self, "stmt_fn", {
-			log("Function", self.dbg_depth);
-			self.dbg_depth += 2;
-			let start = self.peek(0).range().start;
-			self.match_token(TokenType::Fun)?;
-			let name = self.ident()?;
-			self.match_token(TokenType::OParen)?;
-			let params = self.params();
-			self.match_token(TokenType::CParen)?;
-			let rtype = self.match_token(TokenType::RetArrow)
-				.and_then(|_| self.value_type())
-				.unwrap_or(ValueType::Unit);
+		let start = self.peek(0).range().start;
+		self.match_token(TokenType::Fun)?;
+		let name = self.ident()?;
+		self.match_token(TokenType::OParen)?;
+		let params = self.params();
+		self.match_token(TokenType::CParen)?;
+		let rtype = self.match_token(TokenType::RetArrow)
+			.and_then(|_| self.value_type())
+			.unwrap_or(ValueType::Unit);
 
-			let (params, body) = {
-				self.scopes.push();
-				let params = params.iter()
-					.map(|(pname, ptype, pinfo)| {
-						let px = self.nodes.new_var(pname, ptype.clone(), None, pinfo.clone());
-						self.scopes.insert(pname, px)
-					})
-					.collect();
-				let (body,info) = self.block()?;
-				let scope = self.scopes.pop()
-					.ok_or_else(|| self.dbg_ctx.with_msg("empty scope-list in `parser::stmt_fn`"))?;
-				(params, self.nodes.new_block(body, scope, info))
-			};
+		let (params, body) = {
+			self.scopes.push();
+			let params = params.iter()
+				.map(|(pname, ptype, pinfo)| {
+					let px = self.nodes.new_var(pname, ptype.clone(), None, pinfo.clone());
+					self.scopes.insert(pname, px)
+				})
+				.collect();
+			let (body,info) = self.block()?;
+			let scope = self.scopes.pop()
+				.ok_or_else(|| error(&*self.source, self.peek(0).range(), "empty scope-list in `parser::stmt_fn`"))?;
+			(params, self.nodes.new_block(body, scope, info))
+		};
 
-			let end = self.peek(-1).range().end;
-			self.dbg_depth -= 2;
+		let end = self.peek(-1).range().end;
 
-			if self.functions.contains(&name) {
-				return Err(error(&self.source, start..end,
-					"A function with this name is already defined"));
-			}
-			self.functions.insert(Rc::clone(&name));
+		if self.functions.contains(&name) {
+			return Err(error(&self.source, start..end,
+				"A function with this name is already defined"));
+		}
+		self.functions.insert(Rc::clone(&name));
 
-			Ok(self.nodes.new_fun(&name, params, rtype, body, start..end))
-		})
+		Ok(self.nodes.new_fun(&name, params, rtype, body, start..end))
 	}
 
 	fn var_start(&mut self) -> Result<StepResult> {
@@ -1345,19 +1301,19 @@ impl Parser {
 		self.match_token(TokenType::CBrace)?;
 
 		let Some(StackValue::NodeId(body)) = self.values.pop() else {
-			todo!("Expected NODE_ID value in 'var_end'");
+			return Err(error(&*self.source, self.peek(0).range(), "Expected NODE_ID value in 'var_end'"));
 		};
 
 		let Some(StackValue::Type(vtype)) = self.values.pop() else {
-			todo!("Expected TYPE value in 'var_end'");
+			return Err(error(&*self.source, self.peek(0).range(), "Expected TYPE value in 'var_end'"));
 		};
 
 		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
-			todo!("expected INFO value in 'var_end'");
+			return Err(error(&*self.source, self.peek(0).range(), "expected INFO value in 'var_end'"));
 		};
 
 		let Some(StackValue::Ident(name)) = self.values.pop() else {
-			todo!("Expected IDENTIFIER value in 'var_end'");
+			return Err(error(&*self.source, self.peek(0).range(), "Expected IDENTIFIER value in 'var_end'"));
 		};
 
 		// Add to the current scope.
@@ -1378,38 +1334,33 @@ impl Parser {
 
 	/// var := 'var' ident (':' value_type)? '=' (block | expr)
 	pub(super) fn stmt_var(&mut self) -> Result<NodeId> {
-		with_ctx!(self, "stmt_var", {
-			log("Variable", self.dbg_depth);
-			self.dbg_depth += 2;
-			let start = self.peek(0).range().start;
-			self.match_token(TokenType::Var)?;
-			let name = self.ident()?;
-			let vtype = self.match_token(TokenType::Colon)
-				.and_then(|_| self.value_type())
-				.unwrap_or(ValueType::Any);
-			self.match_token(TokenType::Eq1)?;
-			let body = if self.peek(0).tt == TokenType::OBrace {
-				self.scopes.push();
-				let (body,info) = self.block()?;
-				let scope = self.scopes.pop()
-					.ok_or_else(|| self.dbg_ctx.with_msg("empty scope-list in `parser::stmt_var`"))?;
-				self.nodes.new_block(body, scope, info)
-			} else {
-				self.expr(0)?
-			};
-			let end = self.peek(-1).range().end;
-			self.dbg_depth -= 2;
+		let start = self.peek(0).range().start;
+		self.match_token(TokenType::Var)?;
+		let name = self.ident()?;
+		let vtype = self.match_token(TokenType::Colon)
+			.and_then(|_| self.value_type())
+			.unwrap_or(ValueType::Any);
+		self.match_token(TokenType::Eq1)?;
+		let body = if self.peek(0).tt == TokenType::OBrace {
+			self.scopes.push();
+			let (body,info) = self.block()?;
+			let scope = self.scopes.pop()
+				.ok_or_else(|| error(&*self.source, self.peek(0).range(), "empty scope-list in `parser::stmt_var`"))?;
+			self.nodes.new_block(body, scope, info)
+		} else {
+			self.expr(0)?
+		};
+		let end = self.peek(-1).range().end;
 
-			self.scopes.insert(&name, body);
+		self.scopes.insert(&name, body);
 
-			if self.nodes.get(body).map(|n| n.expr.is_const(&self.nodes))
-				.unwrap_or_default()
-			{
-				Ok(body)
-			} else {
-				Ok(self.nodes.new_var(&name, vtype, Some(body), start..end))
-			}
-		})
+		if self.nodes.get(body).map(|n| n.expr.is_const(&self.nodes))
+			.unwrap_or_default()
+		{
+			Ok(body)
+		} else {
+			Ok(self.nodes.new_var(&name, vtype, Some(body), start..end))
+		}
 	}
 
 	fn while_start(&mut self) -> Result<StepResult> {
@@ -1431,15 +1382,15 @@ impl Parser {
 		self.match_token(TokenType::CBrace)?;
 
 		let Some(StackValue::NodeId(body)) = self.values.pop() else {
-			todo!("Expected BODY value in 'while_end'");
+			return Err(error(&*self.source, self.peek(0).range(), "Expected BODY value in 'while_end'"));
 		};
 
 		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
-			todo!("Expected INFO value in 'while_end'");
+			return Err(error(&*self.source, self.peek(0).range(), "Expected INFO value in 'while_end'"));
 		};
 
 		let Some(StackValue::NodeId(cond)) = self.values.pop() else {
-			todo!("Expected COND value in 'while_end'");
+			return Err(error(&*self.source, self.peek(0).range(), "Expected COND value in 'while_end'"));
 		};
 
 		let nx = self.nodes.new_while(cond, body, start as usize..end);
@@ -1449,23 +1400,18 @@ impl Parser {
 
 	/// while := 'while' expr block
 	pub(super) fn stmt_while(&mut self) -> Result<NodeId> {
-		with_ctx!(self, "stmt_while", {
-			log("While", self.dbg_depth);
-			self.dbg_depth += 2;
-			let start = self.peek(0).range().start;
-			self.match_token(TokenType::While)?;
-			let cond = self.expr(0)?;
-			let body = {
-				self.scopes.push();
-				let (body, info) = self.block()?;
-				let scope = self.scopes.pop()
-					.ok_or_else(|| self.dbg_ctx.with_msg("empty scope-list in `parser::stmt_while`"))?;
-				self.nodes.new_block(body, scope, info)
-			};
-			let end = self.peek(-1).range().end;
-			self.dbg_depth -= 2;
-			Ok(self.nodes.new_while(cond, body, start..end))
-		})
+		let start = self.peek(0).range().start;
+		self.match_token(TokenType::While)?;
+		let cond = self.expr(0)?;
+		let body = {
+			self.scopes.push();
+			let (body, info) = self.block()?;
+			let scope = self.scopes.pop()
+				.ok_or_else(|| error(&*self.source, self.peek(0).range(), "empty scope-list in `parser::stmt_while`"))?;
+			self.nodes.new_block(body, scope, info)
+		};
+		let end = self.peek(-1).range().end;
+		Ok(self.nodes.new_while(cond, body, start..end))
 	}
 }
 

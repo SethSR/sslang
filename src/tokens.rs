@@ -119,12 +119,7 @@ impl Token {
 
 impl PartialEq for Token {
 	fn eq(&self, rhs: &Self) -> bool {
-		match (&self.tt, &rhs.tt) {
-			(TokenType::Ident(a), TokenType::Ident(b)) |
-			(TokenType::Integer(a), TokenType::Integer(b)) => a == b,
-			(TokenType::Fixed(a), TokenType::Fixed(b)) => a == b,
-			_ => self.tt == rhs.tt,
-		}
+		self.tt == rhs.tt
 	}
 }
 

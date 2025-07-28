@@ -193,8 +193,8 @@ fn main() -> miette::Result<()> {
 }
 
 use ratatui::{
-	prelude::{CrosstermBackend, Terminal, Constraint, Direction, Layout, Style, Color, Modifier},
-	widgets::{Block, Borders, List, ListItem, Paragraph},
+	prelude::{CrosstermBackend, Terminal, Constraint, Direction, Layout, Line, Span, Style, Color, Modifier},
+	widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
 use crossterm::{
 	event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -302,37 +302,25 @@ impl AppData {
 								.direction(Direction::Horizontal)
 								.margin(1)
 								.constraints([
-									Constraint::Percentage(40),
-									Constraint::Percentage(60),
+									Constraint::Percentage(20),
+									Constraint::Percentage(20),
+									Constraint::Percentage(20),
+									Constraint::Percentage(20),
+									Constraint::Percentage(20),
 								])
 								.split(chunks[0]);
 
-							let node_store = &parser.nodes;
-							let node_list = List::new(
-								parser.ast.iter()
-									.rev()
-									.map(|nx| {
-										let node = match node_store.get(*nx) {
-											Ok(node) => format!("{node}"),
-											Err(e) => format!("{e}"),
-										};
-										ListItem::new(node)
-									})
-									.collect::<Vec<_>>(),
-							)
-							.block(Block::default().title("AST").borders(Borders::ALL));
-
-							f.render_widget(node_list, top[0]);
-
-							let top_right = Layout::default()
-								.direction(Direction::Horizontal)
-								.margin(1)
-								.constraints([
-									Constraint::Ratio(1,3),
-									Constraint::Ratio(1,3),
-									Constraint::Ratio(1,3),
-								])
-								.split(top[1]);
+							let token = parser.input[parser.index].range();
+							let (start, end) = (token.start, token.end);
+							let source = Paragraph::new(Line::from(vec![
+									Span::raw(&parser.source[..start]),
+									Span::styled(&parser.source[start..end], Style::new().add_modifier(Modifier::BOLD)),
+									Span::raw(&parser.source[end..]),
+							]))
+								.wrap(Wrap { trim: true })
+								.scroll((1, 1))
+								.block(Block::default().title("Source").borders(Borders::ALL));
+							f.render_widget(source, top[0]);
 
 							let node_data = parser.nodes.iter()
 								.map(|(nx,n)| {
@@ -343,11 +331,19 @@ impl AppData {
 								});
 							let nodes = Paragraph::new(node_data)
 								.block(Block::default().title("Nodes").borders(Borders::ALL));
-							f.render_widget(nodes, top_right[0]);
+							f.render_widget(nodes, top[1]);
 
 							let scopes = Paragraph::new(format!("{:#?}", parser.scopes))
 								.block(Block::default().title("Scopes").borders(Borders::ALL));
-							f.render_widget(scopes, top_right[1]);
+							f.render_widget(scopes, top[2]);
+
+							let value_data = parser.values.iter()
+								.rev()
+								.map(|value| format!("{value:?}"))
+								.collect::<Vec<_>>();
+							let values = Paragraph::new(value_data.join("\n"))
+								.block(Block::default().title("Values").borders(Borders::ALL));
+							f.render_widget(values, top[3]);
 
 							let stack_data = parser.stack.iter()
 								.rev()
@@ -355,7 +351,7 @@ impl AppData {
 								.collect::<Vec<_>>();
 							let stack = Paragraph::new(stack_data.join("\n"))
 								.block(Block::default().title("Stack").borders(Borders::ALL));
-							f.render_widget(stack, top_right[2]);
+							f.render_widget(stack, top[4]);
 
 							// stepper.program;
 						}
@@ -375,6 +371,10 @@ impl AppData {
 				if event::poll(std::time::Duration::from_millis(200))? {
 					if let Event::Key(key) = event::read()? {
 						use parser::StepResult;
+
+						if key.kind != event::KeyEventKind::Press {
+							continue;
+						}
 
 						match key.code {
 							KeyCode::Char('q') => return Ok(()),

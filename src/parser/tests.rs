@@ -67,7 +67,7 @@ impl Tester {
 	) -> NodeId {
 		let scope = self.2.pop()
 			.unwrap_or_default();
-		self.1.new_block(body.to_vec(), scope, 0..0)
+		self.1.new_block(body.last().copied(), scope, 0..0)
 	}
 
 	fn fun(
@@ -222,7 +222,7 @@ fn assert_nodes(nxa: NodeId, sa: &NodeStore, nxb: NodeId, sb: &NodeStore, indent
 			(Expr::Num(na), Expr::Num(nb)) => assert_eq!(na, nb),
 			(Expr::Block{body:ba,..}, Expr::Block{body:bb,..}) => {
 				eprintln!("{:>1$} {ba:?} <-> {bb:?}", ' ', indent as usize);
-				assert_eq!(ba.len(), bb.len());
+				assert_eq!(ba, bb);
 				for (a,b) in ba.iter().zip(bb.iter()) {
 					assert_nodes(*a, sa, *b, sb, indent + 2);
 				}
@@ -354,14 +354,14 @@ fn var_stmt_udt_fncall_multi() -> miette::Result<()> {
 }
 
 #[test]
-fn fn_stmt() -> miette::Result<()> {
+fn fn_def() -> miette::Result<()> {
 	let mut t = Tester::default();
 	t.0 = t.fun("a", &[], VT::Unit, &[]);
 	parse_test("fn a() {}", &t.finish())
 }
 
 #[test]
-fn fn_stmt_params() -> miette::Result<()> {
+fn fn_def_params() -> miette::Result<()> {
 	let mut t = Tester::default();
 	t.0 = t.fun("a", &[
 		("b".into(), VT::to_u8()),
@@ -373,7 +373,7 @@ fn fn_stmt_params() -> miette::Result<()> {
 }
 
 #[test]
-fn fn_stmt_params_trailing_comma() -> miette::Result<()> {
+fn fn_def_params_trailing_comma() -> miette::Result<()> {
 	let mut t = Tester::default();
 	t.0 = t.fun("a", &[
 		("b".into(), VT::to_u8()),
@@ -383,21 +383,21 @@ fn fn_stmt_params_trailing_comma() -> miette::Result<()> {
 }
 
 #[test]
-fn fn_stmt_rtype_simple() -> miette::Result<()> {
+fn fn_def_rtype_simple() -> miette::Result<()> {
 	let mut t = Tester::default();
 	t.0 = t.fun("a", &[], VT::to_u8(), &[]);
 	parse_test("fn a() -> u8 {}", &t.finish())
 }
 
 #[test]
-fn fn_stmt_rtype_udt() -> miette::Result<()> {
+fn fn_def_rtype_udt() -> miette::Result<()> {
 	let mut t = Tester::default();
 	t.0 = t.fun("a", &[], VT::Udt("b".into()), &[]);
 	parse_test("fn a() -> b {}", &t.finish())
 }
 
 #[test]
-fn fn_stmt_body() -> miette::Result<()> {
+fn fn_def_body() -> miette::Result<()> {
 	let mut t = Tester::default();
 	let b = t.num(1, VT::Int(Int::Bot));
 	let c = t.num(2, VT::Int(Int::Bot));

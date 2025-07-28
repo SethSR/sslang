@@ -49,6 +49,7 @@ impl Iterator for Lexer {
 				',' => break output(TokenType::Comma),
 				'.' => break output(TokenType::Dot),
 				':' => break output(TokenType::Colon),
+				';' => break output(TokenType::Semicolon),
 				'@' => break output(TokenType::At),
 				'{' => break output(TokenType::OBrace),
 				'}' => break output(TokenType::CBrace),

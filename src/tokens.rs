@@ -65,6 +65,7 @@ pub(crate) enum TokenType {
 	RArrBar,  // '|>'
 	RArrEq,   // '>='
 	RetArrow, // '->'
+	Semicolon,// ';'
 	Slash,    // '/'
 	SlashPer, // '/%'
 	Star,     // '*'
@@ -94,7 +95,7 @@ impl Token {
 			TT::Carrot1 | TT::CBrace | TT::CParen | TT::Colon | TT::Comma |
 			TT::Dollar | TT::Dot | TT::Eq1 | TT::LArrow1 |
 			TT::Minus | TT::OBrace | TT::OParen | TT::Percent | TT::Plus |
-			TT::RArrow1 | TT::Slash | TT::Star => 1,
+			TT::RArrow1 | TT::Semicolon | TT::Slash | TT::Star => 1,
 
 			TT::If | TT::U8 | TT::S8 | TT::Amp2 | TT::BangEq |
 			TT::Bar2 | TT::Carrot2 | TT::Eq2 | TT::LArrow2 |

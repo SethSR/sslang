@@ -22,21 +22,21 @@ rec quat {
 }
 
 fn main() {
-	var x:fd12 = 0.44
-	var y:fd12 = 0.01
+	var x:fd12 = 0.44;
+	var y:fd12 = 0.01;
 
-	var p = vec {x:x, y:y}
-	var q = vec {x:1.5, y:2.6}
+	var p = vec {x:x, y:y};
+	var q = vec {x:1.5, y:2.6};
 
 	if x < y {
-		x = y
+		x = y;
 	} else {
-		y = x
+		y = x;
 	}
 
 	while p.x > q.y {
-		var b = 3
-		var x = p.y + 1
+		var b = 3;
+		var x = p.y + 1;
 	}
 
 	fn vmul(a:vec, b:vec) -> quat {

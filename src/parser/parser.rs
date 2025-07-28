@@ -41,7 +41,7 @@ pub(crate) enum StackOp {
 	FunRet,
 	FunEnd,
 	Var,
-	VarEnd,
+	VarEnd(TokenType),
 	While,
 	WhileEnd,
 	If,
@@ -57,13 +57,6 @@ pub(crate) enum StackValue {
 	InfoStart(u16),
 	Type(ValueType),
 	Scope(ScopeTracker),
-
-	// Placeholders
-	Rec,
-	Fun,
-	Var,
-	While,
-	If,
 }
 
 #[derive(Debug)]
@@ -150,139 +143,47 @@ impl<S: AsRef<str>> From<Result<S>> for StepResult {
 	}
 }
 
+impl From<Result<StepResult>> for StepResult {
+	fn from(res: Result<Self>) -> Self {
+		match res {
+			Ok(sr) => sr,
+			Err(e) => e.into(),
+		}
+	}
+}
+
 impl Parser {
 	pub(crate) fn step(&mut self) -> StepResult {
 		match self.stack.pop() {
-			// Some(StackOp::Expr) => {
-			// 	use StackValue as SV;
-			//
-			// 	match self.values.pop() {
-			// 		Some(SV::NodeId(nx)) => {
-			// 			let node = match self.nodes.get(nx) {
-			// 				Ok(node) => node,
-			// 				Err(e) => return Error::Parse(e).into(),
-			// 			};
-			// 			match &node.expr {
-			// 				Expr::Rec {..} |
-			// 				Expr::Var {..} |
-			// 				Expr::Fun {..} => {}
-			//
-			// 				Expr::Num(_) |
-			// 				Expr::Id(_) |
-			// 				Expr::Bool(_) |
-			// 				Expr::Block {..} |
-			// 				Expr::If {..} |
-			// 				Expr::While {..} |
-			// 				Expr::RecInit {..} |
-			// 				Expr::Unary {..} |
-			// 				Expr::Binary {..} |
-			// 				Expr::FnCall {..} |
-			// 				Expr::Phi {..} => self.values.push(SV::NodeId(nx)),
-			// 			}
-			// 			self.ast.push(nx);
-			// 			format!("Parsed expression: '{node}'").into()
-			// 		}
-			//
-			// 		Some(SV::Rec) => {
-			// 			"RECORD - placeholder until we can remove hybrid expression parser".into()
-			// 		}
-			// 		Some(SV::Fun) => {
-			// 			"FUNCTION - placeholder until we can remove hybrid expression parser".into()
-			// 		}
-			// 		Some(SV::Var) => {
-			// 			"VARIABLE - placeholder until we can remove hybrid expression parser".into()
-			// 		}
-			// 		Some(SV::While) => {
-			// 			"WHILE - placeholder until we can remove hybrid expression parser".into()
-			// 		}
-			// 		Some(SV::If) => {
-			// 			"IF - placeholder until we can remove hybrid expression parser".into()
-			// 		}
-			//
-			// 		Some(sv @ SV::Scope(..)) |
-			// 		Some(sv @ SV::InfoStart(..)) |
-			// 		Some(sv @ SV::Type(..)) |
-			// 		Some(sv @ SV::Ident(..)) => {
-			// 			StepResult::Fatal(error(&self.source, self.peek(0).range(),
-			// 				&format!("Unexpected stack-value: '{sv:?}'")))
-			// 		}
-			//
-			// 		None => StepResult::Fatal(error(&self.source, self.peek(0).range(),
-			// 			"Empty value stack")),
-			// 	}
-			// }
-
 			Some(StackOp::Expr) => self.expr2(),
 
-			Some(StackOp::Rec) => match self.rec_start() {
-				Ok(result) => result,
-				Err(e) => e.into(),
-			}
+			Some(StackOp::Rec) => self.rec_start().into(),
 
-			Some(StackOp::RecEnd) => match self.rec_end() {
-				Ok(result) => result,
-				Err(e) => e.into(),
-			}
+			Some(StackOp::RecEnd) => self.rec_end().into(),
 
-			Some(StackOp::Param(closing_token)) => match self.param(closing_token) {
-				Ok(result) => result,
-				Err(e) => e.into(),
-			}
+			Some(StackOp::Param(closing_token)) => self.param(closing_token).into(),
 
-			Some(StackOp::Block(closing_token)) => match self.block2(closing_token) {
-				Ok(result) => result,
-				Err(e) => e.into(),
-			}
+			Some(StackOp::Block(closing_token)) => self.block2(closing_token).into(),
 
-			Some(StackOp::Fun) => match self.fun_start() {
-				Ok(result) => result,
-				Err(e) => e.into(),
-			}
+			Some(StackOp::Fun) => self.fun_start().into(),
 
-			Some(StackOp::FunRet) => match self.fun_return() {
-				Ok(result) => result,
-				Err(e) => e.into(),
-			}
+			Some(StackOp::FunRet) => self.fun_return().into(),
 
-			Some(StackOp::FunEnd) => match self.fun_end() {
-				Ok(result) => result,
-				Err(e) => e.into(),
-			}
+			Some(StackOp::FunEnd) => self.fun_end().into(),
 
-			Some(StackOp::Var) => match self.var_start() {
-				Ok(result) => result,
-				Err(e) => e.into(),
-			}
+			Some(StackOp::Var) => self.var_start().into(),
 
-			Some(StackOp::VarEnd) => match self.var_end() {
-				Ok(result) => result,
-				Err(e) => e.into(),
-			}
+			Some(StackOp::VarEnd(end_token)) => self.var_end(end_token).into(),
 
-			Some(StackOp::While) => match self.while_start() {
-				Ok(result) => result,
-				Err(e) => e.into(),
-			}
+			Some(StackOp::While) => self.while_start().into(),
 
-			Some(StackOp::WhileEnd) => match self.while_end() {
-				Ok(result) => result,
-				Err(e) => e.into(),
-			}
+			Some(StackOp::WhileEnd) => self.while_end().into(),
 
-			Some(StackOp::If) => match self.if_start() {
-				Ok(result) => result,
-				Err(e) => e.into(),
-			}
+			Some(StackOp::If) => self.if_start().into(),
 
-			Some(StackOp::IfElse) => match self.if_else() {
-				Ok(result) => result,
-				Err(e) => e.into(),
-			}
+			Some(StackOp::IfElse) => self.if_else().into(),
 
-			Some(StackOp::IfEnd) => match self.if_end() {
-				Ok(result) => result,
-				Err(e) => e.into(),
-			}
+			Some(StackOp::IfEnd) => self.if_end().into(),
 
 			Some(StackOp::BinaryOp(op)) => {
 				let Some(StackValue::NodeId(right)) = self.values.pop() else {
@@ -385,7 +286,7 @@ fn infix_binding_power(tt: &TokenType) -> Option<(u8,u8)> {
 		TT::At | TT::Bang |
 		TT::Dollar |
 		// Syntax & Punctuation
-		TT::Colon | TT::Comma | TT::CBrace | TT::CParen | TT::OBrace | TT::RetArrow |
+		TT::Colon | TT::Comma | TT::CBrace | TT::CParen | TT::OBrace | TT::Semicolon | TT::RetArrow |
 		// End-of-file
 		TT::Eof => None,
 	}
@@ -738,37 +639,22 @@ impl Parser {
 		let token = self.peek(0);
 		match token.tt {
 			TT::Rec => {
-				// TODO - srenshaw - Remove this placeholder, once we can remove the hybrid expression
-				// method.
-				self.values.push(StackValue::Rec);
 				self.stack.push(StackOp::Rec);
 				"Begin parsing RECORD declaration".into()
 			}
 			TT::Fun => {
-				// TODO - srenshaw - Remove this placeholder, once we can remove the hybrid expression
-				// method.
-				self.values.push(StackValue::Fun);
 				self.stack.push(StackOp::Fun);
 				"Parsed FUNCTION declaration".into()
 			}
 			TT::If => {
-				// TODO - srenshaw - Remove this placeholder, once we can remove the hybrid expression
-				// method.
-				self.values.push(StackValue::If);
 				self.stack.push(StackOp::If);
 				"Parsed IF expression".into()
 			}
 			TT::Var => {
-				// TODO - srenshaw - Remove this placeholder, once we can remove the hybrid expression
-				// method.
-				self.values.push(StackValue::Var);
 				self.stack.push(StackOp::Var);
 				"Parsed VARIABLE declaration".into()
 			}
 			TT::While => {
-				// TODO - srenshaw - Remove this placeholder, once we can remove the hybrid expression
-				// method.
-				self.values.push(StackValue::While);
 				self.stack.push(StackOp::While);
 				"Parsed WHILE expression".into()
 			}
@@ -809,13 +695,56 @@ impl Parser {
 				}
 			}
 
+			TT::Integer(_) => {
+				let info = token.range();
+				let num = match self.num() {
+					Ok(n) => n,
+					Err(e) => return e.into(),
+				};
+				let nx = self.nodes.new_num(num, ValueType::Int(Int::Bot), info);
+				self.values.push(StackValue::NodeId(nx));
+				format!("Parsed INTEGER '{num}' [{nx}]").into()
+			}
+
+			TT::Fixed(_) => {
+				let info = token.range();
+				let num = match self.num() {
+					Ok(n) => n,
+					Err(e) => return e.into(),
+				};
+				let nx = self.nodes.new_num(num, ValueType::Fix(Fix::Bot), info);
+				self.values.push(StackValue::NodeId(nx));
+				format!("Parsed FIXED-POINT '{num}' [{nx}]").into()
+			}
+
 			TT::Eq1 => {
 				self.index += 1;
 				self.stack.push(StackOp::BinaryOp(BinaryOp::Assign));
 				self.stack.push(StackOp::Expr);
 				"Parsing ASSIGN expression".into()
 			}
+			TT::Plus => {
+				self.index += 1;
+				self.stack.push(StackOp::BinaryOp(BinaryOp::Add));
+				self.stack.push(StackOp::Expr);
+				"Parsing ADD expression".into()
+			}
+			TT::Star => {
+				self.index += 1;
+				self.stack.push(StackOp::BinaryOp(BinaryOp::Mul));
+				self.stack.push(StackOp::Expr);
+				"Parsing MUL expression".into()
+			}
+			TT::Dot => {
+				self.index += 1;
+				self.stack.push(StackOp::BinaryOp(BinaryOp::Accessor));
+				self.stack.push(StackOp::Expr);
+				"Parsing ACCESSOR expression".into()
+			}
 
+			TT::Semicolon => {
+				"Found ';'".into()
+			}
 			TT::OBrace => {
 				"Found '{'".into()
 			}
@@ -829,16 +758,7 @@ impl Parser {
 				"Found ')'".into()
 			}
 
-			_ => {
-				format!("Found TOKEN '{token}'\n{self:?}").into()
-				// match self.expr(0) {
-				// 	Ok(nx) => {
-				// 		self.values.push(StackValue::NodeId(nx));
-				// 		"Parsed expression".into()
-				// 	}
-				// 	Err(e) => e.into(),
-				// }
-			}
+			_ => panic!("Found TOKEN '{token}'\n{self:?}"),
 		}
 	}
 
@@ -1263,42 +1183,31 @@ impl Parser {
 			.and_then(|_| self.value_type())
 			.unwrap_or(ValueType::Any);
 		self.match_token(TokenType::Eq1)?;
+
+		let out = format!("Parsed header for VARIABLE '{name}'");
+		// Push the header marker.
+		self.values.push(StackValue::Ident(name));
+		self.values.push(StackValue::InfoStart(start));
+		self.values.push(StackValue::Type(vtype));
+
 		if self.match_token(TokenType::OBrace).is_ok() {
-			let out = format!("Parsed header for VARIABLE '{name}'");
-			// Push the header marker.
-			self.values.push(StackValue::Ident(name));
-			self.values.push(StackValue::InfoStart(start));
-			self.values.push(StackValue::Type(vtype));
 			// Finish parsing the variable after we're done with the block.
-			self.stack.push(StackOp::VarEnd);
+			self.stack.push(StackOp::VarEnd(TokenType::CBrace));
 			// Start a new scope for the variable block.
 			self.scopes.push();
 			self.stack.push(StackOp::Block(TokenType::CBrace));
-			Ok(out.into())
 		} else {
-			// Just an expression, so parse it.
-			let body = self.expr(0)?;
-			let end = self.peek(-1).range().end;
-
-			// Add this variable to the current scope.
-			self.scopes.insert(&name, body);
-
-			let nx = if self.nodes.get(body)
-				.map(|n| n.expr.is_const(&self.nodes))
-				.unwrap_or_default()
-			{
-				body
-			} else {
-				self.nodes.new_var(&name, vtype, Some(body), start as usize..end)
-			};
-			self.values.push(StackValue::NodeId(nx));
-			Ok(format!("Parsed VARIABLE '{name}' [{nx}]").into())
+			// Finish parsing the variable after we're done with the body.
+			self.stack.push(StackOp::VarEnd(TokenType::Semicolon));
+			self.stack.push(StackOp::Expr);
 		}
+
+		Ok(out.into())
 	}
 
-	fn var_end(&mut self) -> Result<StepResult> {
+	fn var_end(&mut self, end_token: TokenType) -> Result<StepResult> {
 		let end = self.peek(0).range().end;
-		self.match_token(TokenType::CBrace)?;
+		self.match_token(end_token)?;
 
 		let Some(StackValue::NodeId(body)) = self.values.pop() else {
 			return Err(error(&*self.source, self.peek(0).range(), "Expected NODE_ID value in 'var_end'"));
@@ -1328,7 +1237,6 @@ impl Parser {
 			self.nodes.new_var(&name, vtype, Some(body), start as usize..end)
 		};
 
-		self.values.push(StackValue::NodeId(nx));
 		Ok(format!("Parsed VARIABLE '{name}' [{nx}]").into())
 	}
 
@@ -1393,8 +1301,7 @@ impl Parser {
 			return Err(error(&*self.source, self.peek(0).range(), "Expected COND value in 'while_end'"));
 		};
 
-		let nx = self.nodes.new_while(cond, body, start as usize..end);
-		self.values.push(StackValue::NodeId(nx));
+		self.nodes.new_while(cond, body, start as usize..end);
 		Ok("Parsed WHILE loop".into())
 	}
 

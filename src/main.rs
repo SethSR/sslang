@@ -53,6 +53,8 @@ main()";
 
 use clap::Parser;
 
+use parser::{Error, Step};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
 	Lexer,
@@ -149,15 +151,14 @@ fn main() -> miette::Result<()> {
 	info!("parsing");
 	let mut stepper = parser::Parser::new(source, &tokens);
 	loop {
-		use parser::StepResult;
 		match stepper.step() {
-			StepResult::Ok(msg) => println!("[step] {msg}"),
-			StepResult::Err(e) => eprintln!("[erro] {e}"),
-			StepResult::Fatal(e) => {
+			Ok(Step::Next(msg)) => println!("[step] {msg}"),
+			Err(Error::Report(e)) => eprintln!("[erep] {e}"),
+			Err(Error::Fatal(e)) => {
 				eprintln!("[exit] {e}");
 				break;
 			}
-			StepResult::Done => {
+			Ok(Step::Done) => {
 				println!("[done] Finished");
 				break;
 			}
@@ -310,12 +311,13 @@ impl AppData {
 								])
 								.split(chunks[0]);
 
-							let token = parser.input[parser.index].range();
-							let (start, end) = (token.start, token.end);
+							let (head, _) = parser.input.split_at(parser.index);
+							let start = head.last()
+								.map(|t| t.range().start)
+								.unwrap_or(0);
 							let source = Paragraph::new(Line::from(vec![
-									Span::raw(&parser.source[..start]),
-									Span::styled(&parser.source[start..end], Style::new().add_modifier(Modifier::BOLD)),
-									Span::raw(&parser.source[end..]),
+									Span::styled(&parser.source[..start], Style::new().add_modifier(Modifier::BOLD)),
+									Span::raw(&parser.source[start..]),
 							]))
 								.wrap(Wrap { trim: true })
 								.scroll((1, 1))
@@ -370,8 +372,6 @@ impl AppData {
 			{
 				if event::poll(std::time::Duration::from_millis(200))? {
 					if let Event::Key(key) = event::read()? {
-						use parser::StepResult;
-
 						if key.kind != event::KeyEventKind::Press {
 							continue;
 						}
@@ -399,13 +399,13 @@ impl AppData {
 									if let Some(mut parser) = parser.take() {
 										loop {
 											match parser.step() {
-												StepResult::Ok(msg) => self.status = format!("[step] {msg}"),
-												StepResult::Err(e) => self.status = format!("[erro] {e}"),
-												StepResult::Fatal(e) => {
+												Ok(Step::Next(msg)) => self.status = format!("[step] {msg}"),
+												Err(Error::Report(e)) => self.status = format!("[erro] {e}"),
+												Err(Error::Fatal(e)) => {
 													self.status = format!("[exit] {e}");
 													break;
 												}
-												StepResult::Done => {
+												Ok(Step::Done) => {
 													self.status = "[done] Finished".into();
 													break;
 												}
@@ -454,18 +454,18 @@ impl AppData {
 								AppState::Parsing(ref mut parser) => {
 									if let Some(mut parser) = parser.take() {
 										match parser.step() {
-											StepResult::Ok(msg) => {
+											Ok(Step::Next(msg)) => {
 												self.status = format!("[step] {msg}");
 												self.state = AppState::Parsing(Some(parser));
 												continue;
 											}
-											StepResult::Err(e) => {
+											Err(Error::Report(e)) => {
 												self.status = format!("[erro] {e}");
 												self.state = AppState::Parsing(Some(parser));
 												continue;
 											}
-											StepResult::Fatal(e) => self.status = format!("[exit] {e}"),
-											StepResult::Done => self.status = "[done] Finished".into(),
+											Err(Error::Fatal(e)) => self.status = format!("[exit] {e}"),
+											Ok(Step::Done) => self.status = "[done] Finished".into(),
 										}
 
 										self.state = match parser.finish() {

@@ -14,7 +14,7 @@ mod types;
 pub(crate) use error::Error;
 pub(crate) use node::{Expr, Node, NodeId, NodeStore};
 pub(crate) use operators::{BinaryOp, UnaryOp};
-pub(crate) use parser::{Parser, ScopeTracker, StepResult};
+pub(crate) use parser::{Parser, ScopeTracker, Step};
 pub(crate) use types::{Meet, ValueType, Int, Fix};
 
 pub(crate) type TokenInfo = Range<usize>;
@@ -114,13 +114,13 @@ pub fn eval(
 	let mut parser = Parser::new(source, &input);
 	loop {
 		match parser.step() {
-			StepResult::Ok(msg) => println!("[step] {msg}"),
-			StepResult::Err(e) => eprintln!("[erro] {e}"),
-			StepResult::Fatal(e) => {
+			Ok(Step::Next(msg)) => println!("[step] {msg}"),
+			Err(Error::Report(e)) => eprintln!("[erep] {e}"),
+			Err(Error::Fatal(e)) => {
 				eprintln!("[exit] {e}");
 				break;
 			}
-			StepResult::Done => {
+			Ok(Step::Done) => {
 				println!("[done] Finished");
 				break;
 			}

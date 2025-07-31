@@ -181,6 +181,26 @@ fn parentheses() -> miette::Result<()> {
 	expr_test("1 * (2 + 3)", &t)
 }
 
+fn simple_test(input: &str) -> miette::Result<()> {
+	let tokens = lexer::eval(input)?;
+	Parser::new(input, &tokens).program()?;
+	Ok(())
+}
+
+#[test]
+#[should_panic(expected="Expected Identifier")]
+fn var_only() {
+	simple_test("var")
+		.unwrap_or_else(|e| panic!("{e}"))
+}
+
+#[test]
+#[should_panic(expected="Expected type-tag or '=' operator")]
+fn var_ident_only() {
+	simple_test("var a")
+		.unwrap_or_else(|e| panic!("{e}"))
+}
+
 fn parse_test(
 	input: &str,
 	tester: &Tester,

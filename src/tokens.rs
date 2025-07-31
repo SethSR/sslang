@@ -70,6 +70,78 @@ pub(crate) enum TokenType {
 	Star,     // '*'
 }
 
+impl std::fmt::Display for TokenType {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		let out = match self {
+			Self::Eof => "End-of-File",
+
+			// Literals
+			Self::Ident(s)   => return write!(f, "'{s}'"),
+			Self::Integer(n) => return write!(f, "{n}"),
+			Self::Fixed(n)   => return write!(f, "{n}"),
+
+			// Keywords
+			Self::If    => "'if' keyword",
+			Self::Fun   => "'fn' keyword",
+			Self::Rec   => "'rec' keyword",
+			Self::Var   => "'var' keyword",
+			Self::Else  => "'else' keyword",
+			Self::While => "'while' keyword",
+			Self::True  => "'true' keyword",
+			Self::False => "'false' keyword",
+
+			// Value Types
+			Self::Bool => "'bool' type",
+			Self::U8   => "'u8' type",
+			Self::U16  => "'u16' type",
+			Self::U32  => "'u32' type",
+			Self::S8   => "'s8' type",
+			Self::S16  => "'s16' type",
+			Self::S32  => "'s32' type",
+			Self::F16(b) => return write!(f, "'fw{b}' type"),
+			Self::F32(b) => return write!(f, "'fd{b}' type"),
+
+			// Operators
+			Self::Amp1     => "'&' operator",
+			Self::Amp2     => "'&&' operator",
+			Self::At       => "'@' operator",
+			Self::Bang     => "'!' operator",
+			Self::BangEq   => "'!=' operator",
+			Self::Bar1     => "'|' operator",
+			Self::Bar2     => "'||' operator",
+			Self::Carrot1  => "'^' operator",
+			Self::Carrot2  => "'^^' operator",
+			Self::CBrace   => "'}' operator",
+			Self::CParen   => "')' operator",
+			Self::Colon    => "':' operator",
+			Self::Comma    => "',' operator",
+			Self::Dollar   => "'$' operator",
+			Self::Dot      => "'.' operator",
+			Self::Eq1      => "'=' operator",
+			Self::Eq2      => "'==' operator",
+			Self::LArrow1  => "'<' operator",
+			Self::LArrow2  => "'<<' operator",
+			Self::LArrBar  => "'<|' operator",
+			Self::LArrEq   => "'<=' operator",
+			Self::Minus    => "'-' operator",
+			Self::OBrace   => "'{' operator",
+			Self::OParen   => "'(' operator",
+			Self::Percent  => "'%' operator",
+			Self::Plus     => "'+' operator",
+			Self::RArrow1  => "'>' operator",
+			Self::RArrow2  => "'>>' operator",
+			Self::RArrBar  => "'|>' operator",
+			Self::RArrEq   => "'>=' operator",
+			Self::RetArrow => "'->' operator",
+			Self::Slash    => "'/' operator",
+			Self::SlashPer => "'/%' operator",
+			Self::Star     => "'*' operator",
+		};
+
+		write!(f, "{out}")
+	}
+}
+
 #[derive(Clone, Eq)]
 pub(crate) struct Token {
 	pub(crate) tt: TokenType,

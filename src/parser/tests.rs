@@ -22,23 +22,23 @@ impl Tester {
 	}
 
 	fn num(&mut self, n: i64, vt: VT) -> NodeId {
-		self.1.new_num(n, vt, 0..0)
+		self.1.create_num(n, vt, 0..0)
 	}
 
 	fn ident(&mut self, s: &str) -> NodeId {
-		self.1.new_id(&s.into(), VT::Any, 0..0)
+		self.1.create_id(&s.into(), VT::Any, 0..0)
 	}
 
 	fn unary(&mut self, op: UnaryOp, rhs: NodeId) -> miette::Result<NodeId> {
-		self.1.new_unary(op, rhs, 0..0)
+		self.1.create_unary(op, rhs, 0..0)
 	}
 
 	fn binary(&mut self, op: BinaryOp, lhs: NodeId, rhs: NodeId) -> miette::Result<NodeId> {
-		self.1.new_binary(op, lhs, rhs, 0..0)
+		self.1.create_binary(op, lhs, rhs, 0..0)
 	}
 
 	fn call(&mut self, name: &str, s: &[NodeId]) -> NodeId {
-		self.1.new_call(&name.into(), s.to_vec(), 0..0)
+		self.1.create_call(&name.into(), s.to_vec(), 0..0)
 	}
 
 	fn var(
@@ -47,14 +47,14 @@ impl Tester {
 		vtype: VT,
 		body: NodeId,
 	) -> NodeId {
-		self.1.new_var(&name.into(), vtype, Some(body), 0..0)
+		self.1.create_var(&name.into(), vtype, Some(body), 0..0)
 	}
 
 	fn block(
 		&mut self,
 		body: &[NodeId],
 	) -> NodeId {
-		self.1.new_block(body.to_vec(), Scope::default(), 0..0)
+		self.1.create_block(body.to_vec(), Scope::default(), 0..0)
 	}
 
 	fn fun(
@@ -65,10 +65,10 @@ impl Tester {
 		body: &[NodeId],
 	) -> NodeId {
 		let params = params.iter()
-			.map(|(pname, ptype)| self.1.new_id(pname, ptype.clone(), 0..0))
+			.map(|(pname, ptype)| self.1.create_id(pname, ptype.clone(), 0..0))
 			.collect();
 		let body = self.block(body);
-		self.1.new_fun(&name.into(), params, rtype, body, 0..0)
+		self.1.create_fun(&name.into(), params, rtype, body, 0..0)
 	}
 
 	fn rec(
@@ -77,9 +77,9 @@ impl Tester {
 		fields: &[TypedIdent],
 	) -> NodeId {
 		let fields = fields.iter()
-			.map(|(fname, ftype)| self.1.new_id(fname, ftype.clone(), 0..0))
+			.map(|(fname, ftype)| self.1.create_id(fname, ftype.clone(), 0..0))
 			.collect();
-		self.1.new_rec(&name.into(), fields, 0..0)
+		self.1.create_rec(&name.into(), fields, 0..0)
 	}
 
 	fn if_s(
@@ -94,7 +94,7 @@ impl Tester {
 		} else {
 			Some(self.block(bf))
 		};
-		self.1.new_if(cond, bt, bf, 0..0)
+		self.1.create_if(cond, bt, bf, 0..0)
 	}
 
 	fn while_s(
@@ -103,7 +103,7 @@ impl Tester {
 		body: &[NodeId],
 	) -> NodeId {
 		let body = self.block(body);
-		self.1.new_while(cond, body, 0..0)
+		self.1.create_while(cond, body, 0..0)
 	}
 }
 

@@ -23,7 +23,7 @@ impl NodeStore {
 }
 
 impl NodeStore {
-	pub(crate) fn new_block(&mut self, body: Vec<NodeId>, scope: Scope, info: TokenInfo) -> NodeId {
+	pub(crate) fn create_block(&mut self, body: Vec<NodeId>, scope: Scope, info: TokenInfo) -> NodeId {
 		println!("Saving block scope: {scope:?}");
 		let kind = body.last()
 			.and_then(|nx| self.data.get(*nx))
@@ -33,11 +33,11 @@ impl NodeStore {
 		self.add(Node::new(Expr::Block { body, scope }, kind, info))
 	}
 
-	pub(crate) fn new_bool(&mut self, b: bool, info: TokenInfo) -> NodeId {
+	pub(crate) fn create_bool(&mut self, b: bool, info: TokenInfo) -> NodeId {
 		self.add(Node::new(Expr::Bool(b), ValueType::Bool, info))
 	}
 
-	pub(crate) fn new_id(
+	pub(crate) fn create_id(
 		&mut self,
 		s: &Rc<str>,
 		kind: ValueType,
@@ -46,7 +46,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::Id(s.clone()), kind, info))
 	}
 
-	pub(crate) fn new_num(
+	pub(crate) fn create_num(
 		&mut self,
 		n: i64,
 		kind: ValueType,
@@ -55,7 +55,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::Num(n), kind, info))
 	}
 
-	pub(crate) fn new_rec(
+	pub(crate) fn create_rec(
 		&mut self,
 		name: &Rc<str>,
 		fields: Vec<NodeId>,
@@ -66,7 +66,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::Rec { name, fields }, ValueType::Udt(udt), info))
 	}
 
-	pub(crate) fn new_fun(
+	pub(crate) fn create_fun(
 		&mut self,
 		name: &Rc<str>,
 		params: Vec<NodeId>,
@@ -79,7 +79,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::Fun { name, params, rtype, body }, kind, info))
 	}
 
-	pub(crate) fn new_var(
+	pub(crate) fn create_var(
 		&mut self,
 		name: &Rc<str>,
 		vtype: ValueType,
@@ -90,7 +90,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::Var { name, body }, vtype, info))
 	}
 
-	pub(crate) fn new_if(
+	pub(crate) fn create_if(
 		&mut self,
 		cond: NodeId,
 		bt: NodeId,
@@ -108,7 +108,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::If { cond, bt, bf }, kind, info))
 	}
 
-	pub(crate) fn new_while(
+	pub(crate) fn create_while(
 		&mut self,
 		cond: NodeId,
 		body: NodeId,
@@ -117,7 +117,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::While { cond, body }, ValueType::Unit, info))
 	}
 
-	pub(crate) fn new_rec_init(
+	pub(crate) fn create_rec_init(
 		&mut self,
 		name: &Rc<str>,
 		field_inits: Vec<(Rc<str>, NodeId)>,
@@ -128,7 +128,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::RecInit { name, field_inits }, ValueType::Udt(udt), info))
 	}
 
-	pub(crate) fn new_unary(
+	pub(crate) fn create_unary(
 		&mut self,
 		op: UnaryOp,
 		rhs: NodeId,
@@ -138,7 +138,7 @@ impl NodeStore {
 		Ok(self.add(Node::new(Expr::Unary { op, rhs }, kind, info)))
 	}
 
-	pub(crate) fn new_binary(
+	pub(crate) fn create_binary(
 		&mut self,
 		op: BinaryOp,
 		lhs: NodeId,
@@ -151,7 +151,7 @@ impl NodeStore {
 		Ok(self.add(Node::new(Expr::Binary { op, lhs, rhs }, kind, info)))
 	}
 
-	pub(crate) fn new_call(
+	pub(crate) fn create_call(
 		&mut self,
 		name: &Rc<str>,
 		args: Vec<NodeId>,
@@ -161,7 +161,7 @@ impl NodeStore {
 		self.add(Node::new(Expr::FnCall { name, args }, ValueType::Any, info))
 	}
 
-	pub(crate) fn new_phi(
+	pub(crate) fn create_phi(
 		&mut self,
 		lhs: NodeId,
 		rhs: NodeId,

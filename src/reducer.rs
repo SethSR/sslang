@@ -26,14 +26,14 @@ impl NodeStore {
 			UnaryOp::Neg => {
 				let node = self.get(rhs).ok()?;
 				match node.expr {
-					Expr::Num(a) => Some(self.new_num(-a, node.kind.clone(), node.info.clone())),
+					Expr::Num(a) => Some(self.create_num(-a, node.kind.clone(), node.info.clone())),
 					_ => None,
 				}
 			}
 			UnaryOp::Not => {
 				let node = self.get(rhs).ok()?;
 				match node.expr {
-					Expr::Num(a) => Some(self.new_num(!a, node.kind.clone(), node.info.clone())),
+					Expr::Num(a) => Some(self.create_num(!a, node.kind.clone(), node.info.clone())),
 					_ => None,
 				}
 			}
@@ -55,7 +55,7 @@ impl NodeStore {
 			let lexpr = &self.get(lhs).ok()?.expr;
 			let rexpr = &self.get(rhs).ok()?.expr;
 			match (lexpr, rexpr) {
-				(Expr::Num(a), Expr::Num(b)) => Some(self.new_num(f(*a,*b), vt, ti)),
+				(Expr::Num(a), Expr::Num(b)) => Some(self.create_num(f(*a,*b), vt, ti)),
 				_ => None,
 			}
 		};
@@ -118,13 +118,13 @@ impl NodeStore {
 
 			// Collapse matching node IDs
 			(Expr::Id(a), Expr::Id(b)) if a == b => {
-				let nx = self.new_num(1, ValueType::Any, rnode.info);
-				self.new_binary(BinaryOp::LShift, lhs, nx, info)
+				let nx = self.create_num(1, ValueType::Any, rnode.info);
+				self.create_binary(BinaryOp::LShift, lhs, nx, info)
 					.ok()
 			}
 
 			// Collapse constants
-			(Expr::Num(a), Expr::Num(b)) => Some(self.new_num(a+b, kind, info)),
+			(Expr::Num(a), Expr::Num(b)) => Some(self.create_num(a+b, kind, info)),
 
 			// Tree-rotate nested ADDs to be simplify friendly
 			(Expr::Num(_), Expr::Binary { op: BinaryOp::Add, lhs: r_lhs, rhs: r_rhs }) => {
@@ -132,9 +132,9 @@ impl NodeStore {
 				let r_rnode = self.get(*r_rhs).ok()?.clone();
 				match (&r_lnode.expr, &r_rnode.expr) {
 					(Expr::Id(_), Expr::Num(_)) => {
-						let new_rhs = self.new_binary(BinaryOp::Add, lhs, *r_rhs, info)
+						let create_rhs = self.create_binary(BinaryOp::Add, lhs, *r_rhs, info)
 							.ok()?;
-						self.new_binary(BinaryOp::Add, *r_lhs, new_rhs, r_lnode.info.start..r_rnode.info.end)
+						self.create_binary(BinaryOp::Add, *r_lhs, create_rhs, r_lnode.info.start..r_rnode.info.end)
 							.ok()
 					}
 					_ => None,
@@ -142,7 +142,7 @@ impl NodeStore {
 			}
 
 			// Tree-Rotate numbers to the right-branch
-			(Expr::Num(_), _) => self.new_binary(BinaryOp::Add, rhs, lhs, info).ok(),
+			(Expr::Num(_), _) => self.create_binary(BinaryOp::Add, rhs, lhs, info).ok(),
 
 			_ => None,
 		}
@@ -162,7 +162,7 @@ impl NodeStore {
 			(Expr::Id(_), Expr::Num(1)) => Some(lhs),
 
 			// Collapse constants
-			(Expr::Num(a), Expr::Num(b)) => Some(self.new_num(a*b, kind, info)),
+			(Expr::Num(a), Expr::Num(b)) => Some(self.create_num(a*b, kind, info)),
 
 			// Tree-rotate nested MULs to be simplify friendly
 			(Expr::Num(_), Expr::Binary { op: BinaryOp::Mul, lhs: r_lhs, rhs: r_rhs }) => {
@@ -170,9 +170,9 @@ impl NodeStore {
 				let r_rnode = self.get(*r_rhs).ok()?.clone();
 				match (&r_lnode.expr, &r_rnode.expr) {
 					(Expr::Id(_), Expr::Num(_)) => {
-						let new_rhs = self.new_binary(BinaryOp::Mul, lhs, *r_rhs, info)
+						let create_rhs = self.create_binary(BinaryOp::Mul, lhs, *r_rhs, info)
 							.ok()?;
-						self.new_binary(BinaryOp::Mul, *r_lhs, new_rhs, r_lnode.info.start..r_rnode.info.end)
+						self.create_binary(BinaryOp::Mul, *r_lhs, create_rhs, r_lnode.info.start..r_rnode.info.end)
 							.ok()
 					}
 					_ => None,
@@ -180,7 +180,7 @@ impl NodeStore {
 			}
 
 			// Tree-Rotate constants to the right-branch
-			(Expr::Num(_), _) => self.new_binary(BinaryOp::Mul, rhs, lhs, info).ok(),
+			(Expr::Num(_), _) => self.create_binary(BinaryOp::Mul, rhs, lhs, info).ok(),
 
 			_ => None,
 		}
@@ -190,11 +190,11 @@ impl NodeStore {
 /*
 pub(crate) fn eval(node: NodeId, store: &mut NodeStore) -> Option<NodeId> {
 	match store.get(node).ok()?.expr {
-		// Expr::If { cond, bt, bf } => Node::new_if(eval(cond), reduce_list(bt), reduce_list(bf), s.info),
-		// Expr::While { cond, body } => Node::new_while(expr(cond), reduce_list(body), s.info),
-		// Expr::Var { name, body } => Node::new_var(name, node.kind, expr(body), s.info),
+		// Expr::If { cond, bt, bf } => Node::create_if(eval(cond), reduce_list(bt), reduce_list(bf), s.info),
+		// Expr::While { cond, body } => Node::create_while(expr(cond), reduce_list(body), s.info),
+		// Expr::Var { name, body } => Node::create_var(name, node.kind, expr(body), s.info),
 		// Expr::Rec {..} => node,
-		/* Expr::Fun { name, params, rtype, body } => Node::new_fun(
+		/* Expr::Fun { name, params, rtype, body } => Node::create_fun(
 			std::rc::Rc::clone(name),
 			params.to_vec(),
 			rtype.clone(),
@@ -203,11 +203,11 @@ pub(crate) fn eval(node: NodeId, store: &mut NodeStore) -> Option<NodeId> {
 		), */
 		// Expr::Num(_) => node,
 		// Expr::Id(_) => node,
-		// Expr::Block(b) => Node::new_block(reduce_list(b), s.info),
+		// Expr::Block(b) => Node::create_block(reduce_list(b), s.info),
 		Expr::Unary { op, rhs } => simplify_unary(op, rhs).unwrap_or(node),
 		Expr::Binary { op, lhs, rhs } => simplify_binary(op, lhs, rhs,
 			node.kind.clone(), node.info.clone()).unwrap_or(node),
-		// Expr::FnCall { name, args } => Node::new_call(name, reduce_list(args), s.info),
+		// Expr::FnCall { name, args } => Node::create_call(name, reduce_list(args), s.info),
 		_ => Node,
 	}
 }
@@ -217,13 +217,13 @@ fn simplify_unary(op: UnaryOp, rhs: &Node) -> Option<Node> {
 		UnaryOp::Pos => Some(rhs.clone()),
 		UnaryOp::Neg => {
 			match &*rhs.expr {
-				Expr::Num(a) => Some(Node::new_num(-a, rhs.kind.clone(), rhs.info.clone())),
+				Expr::Num(a) => Some(Node::create_num(-a, rhs.kind.clone(), rhs.info.clone())),
 				_ => None,
 			}
 		}
 		UnaryOp::Not => {
 			match &*rhs.expr {
-				Expr::Num(a) => Some(Node::new_num(!a, rhs.kind.clone(), rhs.info.clone())),
+				Expr::Num(a) => Some(Node::create_num(!a, rhs.kind.clone(), rhs.info.clone())),
 				_ => None,
 			}
 		}
@@ -242,7 +242,7 @@ fn simplify_binary(
 	let ti = info.clone();
 	let reduce = |lhs: &Node, rhs: &Node, f: fn(i64,i64) -> i64| {
 		match (&*lhs.expr, &*rhs.expr) {
-			(Expr::Num(a), Expr::Num(b)) => Some(Node::new_num(f(a,b), vt, ti)),
+			(Expr::Num(a), Expr::Num(b)) => Some(Node::create_num(f(a,b), vt, ti)),
 			_ => None,
 		}
 	};
@@ -302,21 +302,21 @@ fn simplify_add(
 
 		// Collapse matching hs IDs
 		(Expr::Id(a), Expr::Id(b)) if a == b => {
-			let nx = Node::new_num(1, ValueType::Any, rhs.info.clone());
-			Node::new_binary(BinaryOp::LShift, lhs.clone(), nx, info)
+			let nx = Node::create_num(1, ValueType::Any, rhs.info.clone());
+			Node::create_binary(BinaryOp::LShift, lhs.clone(), nx, info)
 				.ok()
 		}
 
 		// Collapse constants
-		(Expr::Num(a), Expr::Num(b)) => Some(Node::new_num(a+b, kind, info)),
+		(Expr::Num(a), Expr::Num(b)) => Some(Node::create_num(a+b, kind, info)),
 
 		// Tree-rotate nested ADDs to be simplify friendly
 		(Expr::Num(_), Expr::Binary { op: BinaryOp::Add, lhs: r_lhs, rhs: r_rhs }) => {
 			match (self.get(r_lhs).expr, &*r_rhs.expr) {
 				(Expr::Id(_), Expr::Num(_)) => {
-					let new_rhs = Node::new_binary(BinaryOp::Add, lhs.clone(), r_rhs.clone(), info)
+					let create_rhs = Node::create_binary(BinaryOp::Add, lhs.clone(), r_rhs.clone(), info)
 						.ok()?;
-					Node::new_binary(BinaryOp::Add, r_lhs.clone(), new_rhs, r_lhs.info.start..r_rhs.info.end)
+					Node::create_binary(BinaryOp::Add, r_lhs.clone(), create_rhs, r_lhs.info.start..r_rhs.info.end)
 						.ok()
 				}
 				_ => None,
@@ -324,7 +324,7 @@ fn simplify_add(
 		}
 
 		// Tree-Rotate numbers to the right-branch
-		(Expr::Num(_), _) => Node::new_binary(BinaryOp::Add, rhs.clone(), lhs.clone(), info).ok(),
+		(Expr::Num(_), _) => Node::create_binary(BinaryOp::Add, rhs.clone(), lhs.clone(), info).ok(),
 
 		_ => None,
 	}
@@ -336,15 +336,15 @@ fn simplify_mul(lhs: &Node, rhs: &Node, kind: ValueType, info: TokenInfo) -> Opt
 		(Expr::Id(_), Expr::Num(1)) => Some(lhs.clone()),
 
 		// Collapse constants
-		(Expr::Num(a), Expr::Num(b)) => Some(Node::new_num(a*b, kind, info)),
+		(Expr::Num(a), Expr::Num(b)) => Some(Node::create_num(a*b, kind, info)),
 
 		// Tree-rotate nested MULs to be simplify friendly
 		(Expr::Num(_), Expr::Binary { op: BinaryOp::Mul, lhs: r_lhs, rhs: r_rhs }) => {
 			match (&*r_lhs.expr, &*r_rhs.expr) {
 				(Expr::Id(_), Expr::Num(_)) => {
-					let new_rhs = Node::new_binary(BinaryOp::Mul, lhs.clone(), r_rhs.clone(), info)
+					let create_rhs = Node::create_binary(BinaryOp::Mul, lhs.clone(), r_rhs.clone(), info)
 						.ok()?;
-					Node::new_binary(BinaryOp::Mul, r_lhs.clone(), new_rhs, r_lhs.info.start..r_rhs.info.end)
+					Node::create_binary(BinaryOp::Mul, r_lhs.clone(), create_rhs, r_lhs.info.start..r_rhs.info.end)
 						.ok()
 				}
 				_ => None,
@@ -352,7 +352,7 @@ fn simplify_mul(lhs: &Node, rhs: &Node, kind: ValueType, info: TokenInfo) -> Opt
 		}
 
 		// Tree-Rotate constants to the right-branch
-		(Expr::Num(_), _) => Node::new_binary(BinaryOp::Mul, rhs.clone(), lhs.clone(), info).ok(),
+		(Expr::Num(_), _) => Node::create_binary(BinaryOp::Mul, rhs.clone(), lhs.clone(), info).ok(),
 
 		_ => None,
 	}
@@ -372,16 +372,16 @@ mod collapses {
 	}
 
 	fn block(ns: &[Node]) -> Node {
-		Node::new_block(ns.to_vec(), 0..0)
+		Node::create_block(ns.to_vec(), 0..0)
 	}
 
 	fn binary(op: BinaryOp, a: Node, b: Node) -> Node {
-		Node::new_binary(op, a, b, 0..0)
+		Node::create_binary(op, a, b, 0..0)
 			.unwrap()
 	}
 
 	fn unary(op: UnaryOp, a: Node) -> Node {
-		Node::new_unary(op, a, 0..0)
+		Node::create_unary(op, a, 0..0)
 			.unwrap()
 	}
 

@@ -8,40 +8,6 @@ mod lexer;
 mod parser;
 mod reducer;
 
-const TEST_INPUT: &str = "
-rec vec {
-	x:fd,
-	y:fd,
-}
-
-rec quat {
-	s:fd,
-	v:fd,
-}
-
-fn main() {
-	var x:fd12 = 0.44
-	var y:fd12 = 0.01
-
-	var p = vec {x:x, y:y}
-	var q = vec {x:1.5, y:2.6}
-
-	if x < y {
-		x = y
-	} else {
-		y = x
-	}
-
-	fn vmul(a:vec, b:vec) -> quat {
-		quat {
-			s: a.x * b.x + a.y * b.y,
-			v: a.x * b.y - b.x * a.y,
-		}
-	}
-
-	vmul(p, q)
-}";
-
 use clap::Parser;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,19 +57,15 @@ fn main() -> miette::Result<()> {
 		.without_time()
 		.init();
 
-	/*
 	let in_file_name = options.source_file;
 
 	let out_file_name = options.output_file;
 
 	let source = std::fs::read_to_string(&in_file_name.trim())
 		.into_diagnostic()?;
-	*/
-
-	let source = TEST_INPUT;
 
 	info!("lexing");
-	let tokens = lexer::eval(source)?;
+	let tokens = lexer::eval(&source)?;
 	if options.debug.contains(&Stage::Lexer) {
 		let token_str = tokens.iter()
 			.map(|t| t.to_string())
@@ -113,7 +75,7 @@ fn main() -> miette::Result<()> {
 	}
 
 	info!("parsing");
-	let out = parser::eval(source, tokens)?;
+	let out = parser::eval(&source, tokens)?;
 	if options.debug.contains(&Stage::Parser) {
 		debug!("Start ID: {}", out.start);
 		for (nx, node) in out.store.iter() {
@@ -137,8 +99,7 @@ fn main() -> miette::Result<()> {
 
 	let output = format!("AST: {out:?}");
 
-	std::fs::write("test.out", output)
-//	std::fs::write(&out_file_name, output)
+	std::fs::write(&out_file_name, output)
 		.into_diagnostic()
 }
 

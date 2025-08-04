@@ -128,7 +128,7 @@ impl<'a,'b> Parser<'a,'b> {
 		}
 		let scope = self.scopes.pop()
 			.ok_or_else(|| error(self, "empty scope-list in `parser::program`"))?;
-		let nx = self.nodes.new_block(program, scope, 0..self.source.len());
+		let nx = self.nodes.create_block(program, scope, 0..self.source.len());
 		Ok(nx)
 	}
 }
@@ -370,7 +370,7 @@ impl Parser<'_,'_> {
 			let (body, info) = self.block()?;
 			let scope = self.scopes.pop()
 				.ok_or_else(|| error(self, "empty scope-list in `parser::stmt_if::true_block`"))?;
-			self.nodes.new_block(body, scope, info)
+			self.nodes.create_block(body, scope, info)
 		};
 		let t_scopes = self.scopes.clone();
 
@@ -380,7 +380,7 @@ impl Parser<'_,'_> {
 			let (body, info) = self.block()?;
 			let scope = self.scopes.pop()
 				.ok_or_else(|| error(self, "empty scope-list in `parser::stmt_if::false_block`"))?;
-			Some(self.nodes.new_block(body, scope, info))
+			Some(self.nodes.create_block(body, scope, info))
 		} else {
 			None
 		};
@@ -392,7 +392,7 @@ impl Parser<'_,'_> {
 
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
-		Ok(self.nodes.new_if(cond, bt, bf, start..end))
+		Ok(self.nodes.create_if(cond, bt, bf, start..end))
 	}
 
 	fn expr_call(&mut self, lhs: NodeId, op_token: Token) -> Result<NodeId> {
@@ -423,7 +423,7 @@ impl Parser<'_,'_> {
 				&format!("Call to unknown function '{name}'"),
 			));
 		}
-		Ok(self.nodes.new_call(&name, args, lhs_node.info.start..op_token.range().end))
+		Ok(self.nodes.create_call(&name, args, lhs_node.info.start..op_token.range().end))
 	}
 
 	pub(super) fn expr(&mut self, min_bp: u8) -> Result<NodeId> {
@@ -442,12 +442,12 @@ impl Parser<'_,'_> {
 			TT::True => {
 				let token = left_token.clone();
 				self.index += 1;
-				self.nodes.new_bool(true, token.range())
+				self.nodes.create_bool(true, token.range())
 			}
 			TT::False => {
 				let token = left_token.clone();
 				self.index += 1;
-				self.nodes.new_bool(false, token.range())
+				self.nodes.create_bool(false, token.range())
 			}
 
 			TT::Ident(ref s) => {
@@ -462,7 +462,7 @@ impl Parser<'_,'_> {
 					if let Some(nx) = self.scopes.find(&s) {
 						nx
 					} else {
-						let nx = self.nodes.new_id(&s, ValueType::Any, token.range());
+						let nx = self.nodes.create_id(&s, ValueType::Any, token.range());
 						self.scopes.insert(&s, nx)
 					}
 				}
@@ -471,13 +471,13 @@ impl Parser<'_,'_> {
 			TT::Integer(_) => {
 				let token = left_token.clone();
 				let num = self.num()?;
-				self.nodes.new_num(num, ValueType::Int(Int::Bot), token.range())
+				self.nodes.create_num(num, ValueType::Int(Int::Bot), token.range())
 			}
 
 			TT::Fixed(_) => {
 				let token = left_token.clone();
 				let num = self.num()?;
-				self.nodes.new_num(num, ValueType::Fix(Fix::Bot), token.range())
+				self.nodes.create_num(num, ValueType::Fix(Fix::Bot), token.range())
 			}
 
 			TT::OParen => {
@@ -501,7 +501,7 @@ impl Parser<'_,'_> {
 				let token = left_token.clone();
 				self.index += 1;
 				let rhs = self.expr(r_bp)?;
-				self.nodes.new_unary((&token.tt).try_into()?, rhs, token.range())
+				self.nodes.create_unary((&token.tt).try_into()?, rhs, token.range())
 					.map_err(|err| err.with_source_code(self.source.to_string()))?
 			}
 
@@ -538,7 +538,7 @@ impl Parser<'_,'_> {
 				self.index += 1;
 				let op: BinaryOp = (&op_token.tt).try_into()?;
 				let rhs = self.expr(r_bp)?;
-				lhs = self.nodes.new_binary(op, lhs, rhs, op_token.range())?;
+				lhs = self.nodes.create_binary(op, lhs, rhs, op_token.range())?;
 				continue;
 			}
 
@@ -561,7 +561,7 @@ impl Parser<'_,'_> {
 			let (body, info) = self.block()?;
 			let scope = self.scopes.pop()
 				.ok_or_else(|| error(self, "empty scope-list in `parser::field_init`"))?;
-			self.nodes.new_block(body, scope, info)
+			self.nodes.create_block(body, scope, info)
 		} else {
 			self.expr(0)?
 		};
@@ -590,7 +590,7 @@ impl Parser<'_,'_> {
 		self.match_token(TokenType::CBrace)?;
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
-		Ok(self.nodes.new_rec_init(&id, fields, start..end))
+		Ok(self.nodes.create_rec_init(&id, fields, start..end))
 	}
 
 	/// params := ( typed_ident (',' typed_ident)* ','? )?
@@ -650,7 +650,7 @@ impl Parser<'_,'_> {
 		self.match_token(TokenType::OBrace)?;
 		let fields = self.params()
 			.into_iter()
-			.map(|(fname, ftype, finfo)| self.nodes.new_id(&fname, ftype, finfo))
+			.map(|(fname, ftype, finfo)| self.nodes.create_id(&fname, ftype, finfo))
 			.collect();
 		self.match_token(TokenType::CBrace)?;
 		let end = self.peek(-1).range().end;
@@ -662,7 +662,7 @@ impl Parser<'_,'_> {
 		}
 		self.records.insert(Rc::clone(&name));
 
-		let nx = self.nodes.new_rec(&name, fields, start..end);
+		let nx = self.nodes.create_rec(&name, fields, start..end);
 		self.scopes.insert(&name, nx);
 		Ok(nx)
 	}
@@ -685,14 +685,14 @@ impl Parser<'_,'_> {
 			self.scopes.push();
 			let params = params.iter()
 				.map(|(pname, ptype, pinfo)| {
-					let px = self.nodes.new_var(pname, ptype.clone(), None, pinfo.clone());
+					let px = self.nodes.create_var(pname, ptype.clone(), None, pinfo.clone());
 					self.scopes.insert(pname, px)
 				})
 				.collect();
 			let (body,info) = self.block()?;
 			let scope = self.scopes.pop()
 				.ok_or_else(|| error(self, "empty scope-list in `parser::stmt_fn`"))?;
-			(params, self.nodes.new_block(body, scope, info))
+			(params, self.nodes.create_block(body, scope, info))
 		};
 
 		let end = self.peek(-1).range().end;
@@ -704,7 +704,7 @@ impl Parser<'_,'_> {
 		}
 		self.functions.insert(Rc::clone(&name));
 
-		Ok(self.nodes.new_fun(&name, params, rtype, body, start..end))
+		Ok(self.nodes.create_fun(&name, params, rtype, body, start..end))
 	}
 
 	/// var := 'var' ident (':' value_type)? '=' (block | expr)
@@ -728,7 +728,7 @@ impl Parser<'_,'_> {
 			let (body,info) = self.block()?;
 			let scope = self.scopes.pop()
 				.ok_or_else(|| error(self, "empty scope-list in `parser::stmt_var`"))?;
-			self.nodes.new_block(body, scope, info)
+			self.nodes.create_block(body, scope, info)
 		} else {
 			self.expr(0)?
 		};
@@ -742,7 +742,7 @@ impl Parser<'_,'_> {
 		{
 			Ok(body)
 		} else {
-			Ok(self.nodes.new_var(&name, vtype, Some(body), start..end))
+			Ok(self.nodes.create_var(&name, vtype, Some(body), start..end))
 		}
 	}
 
@@ -758,11 +758,11 @@ impl Parser<'_,'_> {
 			let (body, info) = self.block()?;
 			let scope = self.scopes.pop()
 				.ok_or_else(|| error(self, "empty scope-list in `parser::stmt_while`"))?;
-			self.nodes.new_block(body, scope, info)
+			self.nodes.create_block(body, scope, info)
 		};
 		let end = self.peek(-1).range().end;
 		self.dbg_depth -= 2;
-		Ok(self.nodes.new_while(cond, body, start..end))
+		Ok(self.nodes.create_while(cond, body, start..end))
 	}
 }
 
@@ -822,7 +822,7 @@ impl ScopeTracker {
 					for (name, tnx) in t_scope.iter() {
 						let nx = f_scope.remove(name)
 							.filter(|fnx| tnx != fnx)
-							.map(|fnx| nodes.new_phi(*tnx, fnx))
+							.map(|fnx| nodes.create_phi(*tnx, fnx))
 							.unwrap_or(Ok(*tnx))?;
 						scope.insert(Rc::clone(name), nx);
 					}
@@ -830,7 +830,7 @@ impl ScopeTracker {
 					for (name, fnx) in f_scope {
 						let nx = t_scope.remove(name)
 							.filter(|tnx| tnx != fnx)
-							.map(|tnx| nodes.new_phi(tnx, *fnx))
+							.map(|tnx| nodes.create_phi(tnx, *fnx))
 							.unwrap_or(Ok(*fnx))?;
 						scope.insert(Rc::clone(name), nx);
 					}
@@ -857,10 +857,10 @@ impl ScopeTracker {
 #[test]
 fn test_merge() {
 	let mut n = NodeStore::default();
-	let n0 = n.new_num(0, ValueType::Any, 0..0);
-	let n1 = n.new_num(0, ValueType::Any, 0..0);
-	let n2 = n.new_num(0, ValueType::Any, 0..0);
-	let n3 = n.new_num(0, ValueType::Any, 0..0);
+	let n0 = n.create_num(0, ValueType::Any, 0..0);
+	let n1 = n.create_num(0, ValueType::Any, 0..0);
+	let n2 = n.create_num(0, ValueType::Any, 0..0);
+	let n3 = n.create_num(0, ValueType::Any, 0..0);
 	let n4 = n3 + 1;
 
 	let mut s1 = ScopeTracker::default();

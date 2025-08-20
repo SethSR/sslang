@@ -6,7 +6,7 @@ use miette::{LabeledSpan, IntoDiagnostic, WrapErr};
 
 use crate::tokens::{Token, TokenType};
 
-use super::{BinaryOp, Expr, Fix, Int, TokenInfo, ValueType};
+use super::{BinaryOp, Expr, Fix, Int, TokenInfo, UnaryOp, ValueType};
 use super::error::Error;
 use super::node::{NodeId, NodeStore};
 
@@ -40,7 +40,11 @@ pub(crate) struct ScopeTracker(Vec<Scope>);
 pub(crate) enum StackOp {
 	Param(TokenType),
 	Block(TokenType),
-	Expr,
+	Expr(u8),
+	ExprEnd(u8),
+	BinaryOp(BinaryOp),
+	UnaryOp(UnaryOp),
+
 	Rec,
 	RecEnd,
 	Fun,
@@ -49,15 +53,15 @@ pub(crate) enum StackOp {
 	Var,
 	VarEnd(TokenType),
 	While,
+	WhileBody,
 	WhileEnd,
 	If,
 	IfThen,
 	IfElse,
 	IfEnd,
-	BinaryOp(BinaryOp),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum StackValue {
 	NodeId(NodeId),
 	Ident(Rc<str>),
@@ -136,28 +140,25 @@ impl From<String> for Step {
 impl Parser {
 	pub(crate) fn step(&mut self) -> Result<Step> {
 		match self.stack.pop() {
-			Some(StackOp::Expr) => self.expr2(),
-
-			Some(StackOp::Rec) => self.rec_start(),
-
-			Some(StackOp::RecEnd) => self.rec_end(),
-
 			Some(StackOp::Param(closing_token)) => self.param(closing_token),
 
-			Some(StackOp::Block(closing_token)) => self.block2(closing_token),
+			Some(StackOp::Block(closing_token)) => self.block(closing_token),
+
+			Some(StackOp::Expr(min_bp)) => self.expr(min_bp),
+			Some(StackOp::ExprEnd(min_bp)) => self.expr_end(min_bp),
+
+			Some(StackOp::Rec) => self.rec_start(),
+			Some(StackOp::RecEnd) => self.rec_end(),
 
 			Some(StackOp::Fun) => self.fun_start(),
-
 			Some(StackOp::FunRet) => self.fun_return(),
-
 			Some(StackOp::FunEnd) => self.fun_end(),
 
 			Some(StackOp::Var) => self.var_start(),
-
 			Some(StackOp::VarEnd(end_token)) => self.var_end(end_token),
 
 			Some(StackOp::While) => self.while_start(),
-
+			Some(StackOp::WhileBody) => self.while_body(),
 			Some(StackOp::WhileEnd) => self.while_end(),
 
 			Some(StackOp::If) => self.if_start(),
@@ -182,6 +183,20 @@ impl Parser {
 					.expect("unable to create new BINARY-OP");
 				self.values.push(StackValue::NodeId(nx));
 				Ok("Parsed BINARY-OP".into())
+			}
+
+			Some(StackOp::UnaryOp(op)) => {
+				let Some(StackValue::NodeId(right)) = self.values.pop() else {
+					return Err(error(self, "missing right-operand for UNARY-OP"));
+				};
+				let end = self.nodes.get(right)
+					.map(|n| n.info.end)
+					.expect("unable to get right-operand token-info");
+				// TODO - srenshaw - save start location, so we can retrieve it here
+				let nx = self.nodes.new_unary(op, right, 0..end)
+					.expect("unable to create new UNARY-OP");
+				self.values.push(StackValue::NodeId(nx));
+				Ok("Parsed UNARY-OP".into())
 			}
 
 			None => Ok(Step::Done),
@@ -376,38 +391,13 @@ impl Parser {
 		}
 	}
 
-	pub(super) fn ident_typed(&mut self) -> Result<(Rc<str>, ValueType, TokenInfo)> {
-		let start = self.peek(0).range().start;
-		let result = self.ident()
-			.and_then(|id| self.match_token(TokenType::Colon).map(|_| id))
-			.and_then(|id| self.value_type().map(|vt| {
-				let end = self.peek(-1).range().end;
-				(Rc::clone(&id), vt, start..end)
-			}));
-		result
-	}
-
-	/// args := (expr (',' expr)* ','?)?
-	pub(super) fn args(&mut self) -> Option<Vec<NodeId>> {
-		let first = self.expr(0)
-			.ok()?;
-		let mut out = vec![first];
-		while let Ok(next) = self.match_token(TokenType::Comma)
-			.and_then(|_| self.expr(0))
-		{
-			out.push(next);
-		}
-		let _ = self.match_token(TokenType::Comma);
-		Some(out)
-	}
-
 	fn if_start(&mut self) -> Result<Step> {
 		let start = self.peek(0).start;
 		self.match_token(TokenType::If)?;
 
 		self.values.push(StackValue::InfoStart(start));
 		self.stack.push(StackOp::IfThen);
-		self.stack.push(StackOp::Expr);
+		self.stack.push(StackOp::Expr(0));
 		Ok("Parsing IF expression".into())
 	}
 
@@ -518,49 +508,14 @@ impl Parser {
 		Ok((start, cond, scope.clone()))
 	}
 
-	/// if := 'if' expr block ('else' block)?
-	pub(super) fn stmt_if(&mut self) -> Result<NodeId> {
-		let start = self.peek(0).range().start;
-		self.match_token(TokenType::If)?;
-		let cond = self.expr(0)?;
-
-		let f_scopes = self.scopes.clone();
-
-		let bt = {
-			self.scopes.push();
-			let (body, info) = self.block()?;
-			let scope = self.scopes.pop()
-				.ok_or_else(|| error(self, "empty scope-list in `parser::stmt_if::true_block`"))?;
-			self.nodes.new_block(body, scope, info)
-		};
-		let t_scopes = self.scopes.clone();
-
-		self.scopes = f_scopes;
-		let bf = if self.match_token(TokenType::Else).is_ok() {
-			self.scopes.push();
-			let (body, info) = self.block()?;
-			let scope = self.scopes.pop()
-				.ok_or_else(|| error(self, "empty scope-list in `parser::stmt_if::false_block`"))?;
-			Some(self.nodes.new_block(body, scope, info))
-		} else {
-			None
-		};
-
-		self.scopes = ScopeTracker::merge(
-			&mut self.nodes,
-			t_scopes,
-			self.scopes.clone())?;
-
-		let end = self.peek(-1).range().end;
-		Ok(self.nodes.new_if(cond, bt, bf, start..end))
-	}
-
 	fn expr_call(&mut self, lhs: NodeId, info: TokenInfo) -> Result<NodeId> {
 		let lhs_node = self.nodes.get(lhs)?.clone();
 		match lhs_node.expr {
 			Expr::Id(name) => {
 				self.index += 1;
-				let args = self.args().unwrap_or_default();
+				// TODO - srenshaw - Need to reimplement Argument parsing
+				// let args = self.args().unwrap_or_default();
+				let args = vec![];
 
 				if self.match_token(TokenType::CParen).is_err() {
 					return Err(expected(self, ")"));
@@ -590,7 +545,9 @@ impl Parser {
 
 			Expr::Fun { name, params, rtype, ..} => {
 				self.index += 1;
-				let args = self.args().unwrap_or_default();
+				// TODO - srenshaw - Need to reimplement Argument parsing
+				// let args = self.args().unwrap_or_default();
+				let args = vec![];
 
 				if self.match_token(TokenType::CParen).is_err() {
 					return Err(expected(self, ")"));
@@ -610,8 +567,10 @@ impl Parser {
 		}
 	}
 
-	fn expr2(&mut self) -> Result<Step> {
+	fn expr(&mut self, min_bp: u8) -> Result<Step> {
 		use TokenType as TT;
+
+		self.stack.push(StackOp::ExprEnd(min_bp));
 
 		let token = self.peek(0);
 		match token.tt {
@@ -649,13 +608,12 @@ impl Parser {
 					let nx = self.expr_call(id, info)?;
 					self.values.push(StackValue::NodeId(nx));
 					Ok("Parsed FUNCTION-CALL expression".into())
-				} else if self.peek(1).tt == TokenType::OBrace && self.peek(3).tt == TokenType::Colon {
-					let nx = self.expr_rec_init()?;
-					self.values.push(StackValue::NodeId(nx));
-					Ok("Parsed RECORD initializer expression".into())
+				// TODO - srenshaw - Need to reimplement Record Initializer Values
+				// } else if self.peek(1).tt == TokenType::OBrace && self.peek(3).tt == TokenType::Colon {
+				// 	let nx = self.expr_rec_init()?;
+				// 	self.values.push(StackValue::NodeId(nx));
+				// 	Ok("Parsed RECORD initializer expression".into())
 				} else if let Some(nx) = self.scopes.find(&s) {
-					self.stack.push(StackOp::Expr);
-
 					self.values.push(StackValue::NodeId(nx));
 					self.index += 1;
 					Ok(format!("Parsed IDENTIFIER '{s}' [{nx}]").into())
@@ -682,109 +640,19 @@ impl Parser {
 				Ok(format!("Parsed FIXED-POINT '{num}' [{nx}]").into())
 			}
 
-			TT::Eq1 => {
-				self.index += 1;
-				self.stack.push(StackOp::BinaryOp(BinaryOp::Assign));
-				self.stack.push(StackOp::Expr);
-				Ok("Parsing ASSIGN expression".into())
-			}
-			TT::Plus => {
-				self.index += 1;
-				self.stack.push(StackOp::BinaryOp(BinaryOp::Add));
-				self.stack.push(StackOp::Expr);
-				Ok("Parsing ADD expression".into())
-			}
-			TT::Star => {
-				self.index += 1;
-				self.stack.push(StackOp::BinaryOp(BinaryOp::Mul));
-				self.stack.push(StackOp::Expr);
-				Ok("Parsing MUL expression".into())
-			}
-			TT::Dot => {
-				self.index += 1;
-				self.stack.push(StackOp::BinaryOp(BinaryOp::Accessor));
-				self.stack.push(StackOp::Expr);
-				Ok("Parsing ACCESSOR expression".into())
-			}
-
-			TT::Semicolon => {
-				Ok("Found ';'".into())
-			}
-			TT::OBrace => {
-				Ok("Found '{'".into())
-			}
-			TT::CBrace => {
-				Ok("Found '}'".into())
-			}
-			TT::OParen => {
-				Ok("Found '('".into())
-			}
-			TT::CParen => {
-				Ok("Found ')'".into())
-			}
-
-			_ => panic!("Found TOKEN '{token}'\n{self:?}"),
-		}
-	}
-
-	pub(super) fn expr(&mut self, min_bp: u8) -> Result<NodeId> {
-		use TokenType as TT;
-
-		let left_token = self.peek(0);
-		let mut lhs: NodeId = match left_token.tt {
-			TT::If => self.stmt_if()?,
-			TT::Fun => self.stmt_fn()?,
-			TT::Rec => self.stmt_rec()?,
-			TT::Var => self.stmt_var()?,
-			TT::While => self.stmt_while()?,
-
 			TT::True => {
-				let token = left_token.clone();
+				let info = token.range();
 				self.index += 1;
-				self.nodes.new_bool(true, token.range())
+				let nx = self.nodes.new_bool(true, info);
+				self.values.push(StackValue::NodeId(nx));
+				Ok(format!("Parsed TRUE [{nx}]").into())
 			}
 			TT::False => {
-				let token = left_token.clone();
+				let info = token.range();
 				self.index += 1;
-				self.nodes.new_bool(false, token.range())
-			}
-
-			TT::Ident(ref s) => {
-				if self.peek(1).tt == TT::OBrace && self.peek(3).tt == TT::Colon {
-					self.expr_rec_init()?
-				} else {
-					let token = left_token.clone();
-					let s = Rc::clone(s);
-					self.index += 1;
-					if let Some(nx) = self.scopes.find(&s) {
-						nx
-					} else {
-						let nx = self.nodes.new_id(&s, ValueType::Any, token.range());
-						self.scopes.insert(&s, nx)
-					}
-				}
-			}
-
-			TT::Integer(_) => {
-				let token = left_token.clone();
-				let num = self.num()?;
-				self.nodes.new_num(num, ValueType::Int(Int::Bot), token.range())
-			}
-
-			TT::Fixed(_) => {
-				let token = left_token.clone();
-				let num = self.num()?;
-				self.nodes.new_num(num, ValueType::Fix(Fix::Bot), token.range())
-			}
-
-			TT::OParen => {
-				self.index += 1;
-				let lhs = self.expr(0)?;
-				if TT::CParen != self.peek(0).tt {
-					return Err(expected(self, ")"));
-				}
-				self.index += 1;
-				lhs
+				let nx = self.nodes.new_bool(false, info);
+				self.values.push(StackValue::NodeId(nx));
+				Ok(format!("Parsed FALSE [{nx}]").into())
 			}
 
 			TT::Plus |
@@ -792,97 +660,97 @@ impl Parser {
 			TT::Dollar |
 			TT::At |
 			TT::Bang => {
-				let Some(r_bp) = prefix_binding_power(&self.peek(0).tt) else {
-					return Err(expected(self, "Unary Operator"));
+				let Some(r_bp) = prefix_binding_power(&token.tt) else {
+					return Err(expected(self, "Unary Operator ['+', '-', '$', '@', '!']"));
 				};
-				let token = left_token.clone();
+				let unary_op : UnaryOp = token.tt.clone().try_into()?;
 				self.index += 1;
-				let rhs = self.expr(r_bp)?;
-				self.nodes.new_unary((&token.tt).try_into()?, rhs, token.range())
-					.map_err(|err| err.with_source_code(self.source.to_string()))?
+				self.stack.push(StackOp::UnaryOp(unary_op));
+				self.stack.push(StackOp::Expr(r_bp));
+				Ok(format!("Parsed UNARY OP '{unary_op}'").into())
 			}
 
-			TT::Eof => return Err(eof_error(self, "Identifier, Function Call, or Literal")),
-
-			_ => return Err(expected(self, "Identifier, Function Call, or Literal")),
-		};
-
-		loop {
-			let op_token = self.peek(0).clone();
-			if matches!(op_token.tt,
-				TT::Ident(_) | TT::Integer(_) | TT::Fixed(_) |
-				TT::If | TT::Else | TT::While |
-				TT::Fun | TT::Rec | TT::Var |
-				TT::U8 | TT::U16 | TT::U32 |
-				TT::S8 | TT::S16 | TT::S32 |
-				TT::F16(_) | TT::F32(_) |
-				TT::OBrace |
-				TT::Colon | TT::CBrace | TT::CParen |
-				TT::Eof) {
-				break;
+			TT::Semicolon => {
+				// End expression
+				Ok("Found ';'".into())
+			}
+			TT::OBrace => {
+				// Open block
+				self.stack.push(StackOp::Block(TokenType::CBrace));
+				Ok("Found '{'".into())
+			}
+			TT::CBrace => {
+				// End expression - return to parsing block
+				Ok("Found '}'".into())
+			}
+			TT::OParen => {
+				// New expression
+				self.index += 1;
+				self.stack.push(StackOp::Expr(0));
+				Ok("Found '('".into())
 			}
 
-			if TT::OParen == op_token.tt {
-				lhs = self.expr_call(lhs, op_token.range())?;
-				continue;
+			/* ERROR values */
+			TT::CParen => {
+				Err(expected(self, "Expression value ['if', 'while', 'rec', 'fn', 'val', 'var', identifier, number ]"))
 			}
 
-			if let Some((l_bp,r_bp)) = infix_binding_power(&op_token.tt) {
-				if l_bp < min_bp {
-					break;
+			_ => panic!("Found TOKEN '{token}'\n{self:?}"),
+		}
+	}
+
+	fn expr_end(&mut self, min_bp: u8) -> Result<Step> {
+		use TokenType as TT;
+
+		let token = self.peek(0).clone();
+		match token.tt {
+			TT::Ident(_) | TT::Integer(_) | TT::Fixed(_) |
+			TT::If | TT::Else | TT::While |
+			TT::Fun | TT::Rec | TT::Var |
+			TT::U8 | TT::U16 | TT::U32 |
+			TT::S8 | TT::S16 | TT::S32 |
+			TT::F16(_) | TT::F32(_) |
+			TT::OBrace | TT::CBrace | TT::CParen |
+			TT::Colon => Ok("End of expression".into()),
+
+			TT::Semicolon => {
+				self.index += 1;
+				Ok("End of expression".into())
+			}
+
+			TT::Eof => Err(error(self, "unexpected EoF")),
+
+			TT::OParen => {
+				let Some(StackValue::NodeId(lhs)) = self.values.pop() else {
+					return Err(error(self, "missing IDENTIFIER for function call"));
+				};
+				let lhs = self.expr_call(lhs, token.range())?;
+				self.values.push(StackValue::NodeId(lhs));
+				self.stack.push(StackOp::ExprEnd(min_bp));
+				Ok("Continuing expression parsing - fn-call".into())
+			}
+
+			tt => {
+				if let Some((l_bp, r_bp)) = infix_binding_power(&tt) {
+					if l_bp < min_bp {
+						return Ok("End of sub-expression".into());
+					}
+
+					let op: BinaryOp = tt.try_into()?;
+					self.index += 1;
+					self.stack.push(StackOp::ExprEnd(min_bp));
+					self.stack.push(StackOp::BinaryOp(op));
+					self.stack.push(StackOp::Expr(r_bp));
+					Ok("Continuing expression parsing - binop".into())
+				} else {
+					self.stack.push(StackOp::ExprEnd(min_bp));
+					Ok(format!("Continuing expression parsing - '{tt:?}'").into())
 				}
-
-				self.index += 1;
-				let op: BinaryOp = (&op_token.tt).try_into()?;
-				let rhs = self.expr(r_bp)?;
-				lhs = self.nodes.new_binary(op, lhs, rhs, op_token.range())?;
-				continue;
 			}
-
-			break;
 		}
-
-		Ok(lhs)
 	}
 
-	/// field_init := ident ':' (block | expr)
-	fn field_init(&mut self) -> Result<(Rc<str>, NodeId)> {
-		let id = self.ident()?;
-		self.match_token(TokenType::Colon)?;
-		let body = if self.peek(1).tt == TokenType::OBrace {
-			self.scopes.push();
-			let (body, info) = self.block()?;
-			let scope = self.scopes.pop()
-				.ok_or_else(|| error(self, "empty scope-list in `parser::field_init`"))?;
-			self.nodes.new_block(body, scope, info)
-		} else {
-			self.expr(0)?
-		};
-		Ok((id, body))
-	}
-
-	/// expr_rec_init := ident '{' field_init* '}'
-	pub(super) fn expr_rec_init(&mut self) -> Result<NodeId> {
-		let start = self.peek(0).range().start;
-		let id = self.ident()?;
-		self.match_token(TokenType::OBrace)?;
-		let mut fields = vec![];
-		if let Ok(first) = self.field_init() {
-			fields.push(first);
-
-			while let Ok(field) = self.match_token(TokenType::Comma)
-				.and_then(|_| self.field_init())
-			{
-				fields.push(field);
-			}
-			let _ = self.match_token(TokenType::Comma);
-		}
-		self.match_token(TokenType::CBrace)?;
-		let end = self.peek(-1).range().end;
-		Ok(self.nodes.new_rec_init(&id, fields, start..end))
-	}
-
-	fn block2(&mut self, closing_token: TokenType) -> Result<Step> {
+	fn block(&mut self, closing_token: TokenType) -> Result<Step> {
 		if self.peek(0).tt == closing_token {
 			let mut body = None;
 			while let Some(StackValue::NodeId(nx)) = self.values.last() {
@@ -902,7 +770,7 @@ impl Parser {
 		self.stack.push(StackOp::Block(closing_token));
 
 		// This is the expression we'll attempt to parse
-		self.stack.push(StackOp::Expr);
+		self.stack.push(StackOp::Expr(0));
 
 		Ok("Parsing Expression".into())
 	}
@@ -930,44 +798,6 @@ impl Parser {
 		self.values.push(StackValue::NodeId(nx));
 
 		Ok(format!("Parsed Parameter '{fname}: {vt}'").into())
-	}
-
-	/// params := ( typed_ident (',' typed_ident)* ','? )?
-	pub(super) fn params(&mut self) -> Vec<(Rc<str>, ValueType, TokenInfo)> {
-		let Ok(first) = self.ident_typed() else {
-			return vec![];
-		};
-
-		let mut out = vec![first];
-		while let Ok(id) = self.match_token(TokenType::Comma)
-			.and_then(|_| self.ident_typed())
-		{
-			out.push(id);
-		}
-
-		let _ = self.match_token(TokenType::Comma);
-		out
-	}
-
-	/// block := '{' expr* '}'
-	pub(super) fn block(&mut self) -> Result<(Option<NodeId>, TokenInfo)> {
-		let start = self.peek(0).range().start;
-		match self.match_token(TokenType::OBrace) {
-			Ok(_) => {},
-			Err(e) => {
-				return Err(e);
-			}
-		}
-		let mut body = None;
-		while let Ok(expr) = self.expr(0) {
-			body = Some(expr);
-		}
-		let result = self.match_token(TokenType::CBrace)
-			.map(|_| {
-				let end = self.peek(-1).range().end;
-				(body, start..end)
-			});
-		result
 	}
 
 	fn rec_start(&mut self) -> Result<Step> {
@@ -1010,30 +840,6 @@ impl Parser {
 		self.records.insert(name);
 		self.ast.push(nx);
 		Ok(out.into())
-	}
-
-	/// rec := 'rec' ident '{' params '}'
-	pub(super) fn stmt_rec(&mut self) -> Result<NodeId> {
-		let start = self.peek(0).range().start;
-		self.match_token(TokenType::Rec)?;
-		let name = self.ident()?;
-		self.match_token(TokenType::OBrace)?;
-		let fields = self.params()
-			.into_iter()
-			.map(|(fname, ftype, finfo)| self.nodes.new_id(&fname, ftype, finfo))
-			.collect();
-		self.match_token(TokenType::CBrace)?;
-		let end = self.peek(-1).range().end;
-
-		if self.records.contains(&name) {
-			return Err(Error::report(&self.source, start..end, "here",
-				"A record with this name is already defined"));
-		}
-		self.records.insert(Rc::clone(&name));
-
-		let nx = self.nodes.new_rec(&name, fields, start..end);
-		self.scopes.insert(&name, nx);
-		Ok(nx)
 	}
 
 	fn fun_start(&mut self) -> Result<Step> {
@@ -1103,43 +909,6 @@ impl Parser {
 		Ok(out.into())
 	}
 
-	/// fn := 'fn' ident '(' params ')' ('->' value_type)? block
-	pub(super) fn stmt_fn(&mut self) -> Result<NodeId> {
-		let start = self.peek(0).range().start;
-		self.match_token(TokenType::Fun)?;
-		let name = self.ident()?;
-		self.match_token(TokenType::OParen)?;
-		let params = self.params();
-		self.match_token(TokenType::CParen)?;
-		let rtype = self.match_token(TokenType::RetArrow)
-			.and_then(|_| self.value_type())
-			.unwrap_or(ValueType::Unit);
-
-		let (params, body) = {
-			self.scopes.push();
-			let params = params.iter()
-				.map(|(pname, ptype, pinfo)| {
-					let px = self.nodes.new_var(pname, ptype.clone(), None, pinfo.clone());
-					self.scopes.insert(pname, px)
-				})
-				.collect();
-			let (body,info) = self.block()?;
-			let scope = self.scopes.pop()
-				.ok_or_else(|| error(self, "empty scope-list in `parser::stmt_fn`"))?;
-			(params, self.nodes.new_block(body, scope, info))
-		};
-
-		let end = self.peek(-1).range().end;
-
-		if self.functions.contains(&name) {
-			return Err(Error::report(&self.source, start..end, "here",
-				"A function with this name is already defined"));
-		}
-		self.functions.insert(Rc::clone(&name));
-
-		Ok(self.nodes.new_fun(&name, params, rtype, body, start..end))
-	}
-
 	fn var_start(&mut self) -> Result<Step> {
 		let start = self.peek(0).start;
 		self.match_token(TokenType::Var)?;
@@ -1164,7 +933,7 @@ impl Parser {
 		} else {
 			// Finish parsing the variable after we're done with the body.
 			self.stack.push(StackOp::VarEnd(TokenType::Semicolon));
-			self.stack.push(StackOp::Expr);
+			self.stack.push(StackOp::Expr(0));
 		}
 
 		Ok(out.into())
@@ -1205,49 +974,21 @@ impl Parser {
 		Ok(format!("Parsed VARIABLE '{name}' [{nx}]").into())
 	}
 
-	/// var := 'var' ident (':' value_type)? '=' (block | expr)
-	pub(super) fn stmt_var(&mut self) -> Result<NodeId> {
-		let start = self.peek(0).range().start;
-		self.match_token(TokenType::Var)?;
-		let name = self.ident()?;
-		let vtype = self.match_token(TokenType::Colon)
-			.and_then(|_| self.value_type())
-			.unwrap_or(ValueType::Any);
-		self.match_token(TokenType::Eq1)?;
-		let body = if self.peek(0).tt == TokenType::OBrace {
-			self.scopes.push();
-			let (body,info) = self.block()?;
-			let scope = self.scopes.pop()
-				.ok_or_else(|| error(self, "empty scope-list in `parser::stmt_var`"))?;
-			self.nodes.new_block(body, scope, info)
-		} else {
-			self.expr(0)?
-		};
-		let end = self.peek(-1).range().end;
-
-		self.scopes.insert(&name, body);
-
-		if self.nodes.get(body).map(|n| n.expr.is_const(&self.nodes))
-			.unwrap_or_default()
-		{
-			Ok(body)
-		} else {
-			Ok(self.nodes.new_var(&name, vtype, Some(body), start..end))
-		}
-	}
-
 	fn while_start(&mut self) -> Result<Step> {
 		let start = self.peek(0).start;
 		self.match_token(TokenType::While)?;
-		let cond = self.expr(0)?;
-		self.match_token(TokenType::OBrace)?;
-
-		self.values.push(StackValue::NodeId(cond));
 		self.values.push(StackValue::InfoStart(start));
+		self.stack.push(StackOp::WhileBody);
+		self.stack.push(StackOp::Expr(0));
+		Ok("Parsed header for WHILE loop".into())
+	}
+
+	fn while_body(&mut self) -> Result<Step> {
+		self.match_token(TokenType::OBrace)?;
 		self.stack.push(StackOp::WhileEnd);
 		self.scopes.push();
 		self.stack.push(StackOp::Block(TokenType::CBrace));
-		Ok("Parsed header for WHILE loop".into())
+		Ok("Parsed condition for WHILE loop".into())
 	}
 
 	fn while_end(&mut self) -> Result<Step> {
@@ -1258,32 +999,16 @@ impl Parser {
 			return Err(error(self, "Expected BODY value in 'while_end'"));
 		};
 
-		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
-			return Err(error(self, "Expected INFO value in 'while_end'"));
-		};
-
 		let Some(StackValue::NodeId(cond)) = self.values.pop() else {
 			return Err(error(self, "Expected COND value in 'while_end'"));
 		};
 
+		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+			return Err(error(self, "Expected INFO value in 'while_end'"));
+		};
+
 		self.nodes.new_while(cond, body, start as usize..end);
 		Ok("Parsed WHILE loop".into())
-	}
-
-	/// while := 'while' expr block
-	pub(super) fn stmt_while(&mut self) -> Result<NodeId> {
-		let start = self.peek(0).range().start;
-		self.match_token(TokenType::While)?;
-		let cond = self.expr(0)?;
-		let body = {
-			self.scopes.push();
-			let (body, info) = self.block()?;
-			let scope = self.scopes.pop()
-				.ok_or_else(|| error(self, "empty scope-list in `parser::stmt_while`"))?;
-			self.nodes.new_block(body, scope, info)
-		};
-		let end = self.peek(-1).range().end;
-		Ok(self.nodes.new_while(cond, body, start..end))
 	}
 }
 

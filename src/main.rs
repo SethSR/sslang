@@ -138,6 +138,10 @@ fn main() -> miette::Result<()> {
 
 	let source = TEST_INPUT;
 
+	if let Err(e) = AppData::new(source).start() {
+		panic!("ERR: {e}");
+	}
+
 	info!("lexing");
 	let tokens = lexer::eval(source)?;
 	if options.debug.contains(&Stage::Lexer) {
@@ -207,7 +211,6 @@ enum AppState {
 	Ready,
 	Lexing(lexer::Lexer),
 	Parsing(Option<Box<parser::Parser>>),
-	// Checking(TypeChecker),
 	Done(parser::NodeId, parser::NodeStore),
 }
 
@@ -400,7 +403,7 @@ impl AppData {
 										loop {
 											match parser.step() {
 												Ok(Step::Next(msg)) => self.status = format!("[step] {msg}"),
-												Err(Error::Report(e)) => self.status = format!("[erro] {e}"),
+												Err(Error::Report(e)) => self.status = format!("[erep] {e}"),
 												Err(Error::Fatal(e)) => {
 													self.status = format!("[exit] {e}");
 													break;
@@ -460,7 +463,7 @@ impl AppData {
 												continue;
 											}
 											Err(Error::Report(e)) => {
-												self.status = format!("[erro] {e}");
+												self.status = format!("[erep] {e}");
 												self.state = AppState::Parsing(Some(parser));
 												continue;
 											}

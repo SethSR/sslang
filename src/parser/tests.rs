@@ -129,10 +129,15 @@ impl Tester {
 }
 
 fn expr_test(source: &str, tester: &Tester) -> miette::Result<()> {
+	use crate::parser::parser::StackValue;
+
 	let input = lexer::eval(source)?;
 	let mut parser = Parser::new(source, &input);
 	parser.scopes.add(Scope::default());
-	let expr = parser.expr(0)?;
+	parser.expr(0)?;
+	let Some(StackValue::NodeId(expr)) = parser.values.pop() else {
+		panic!("expected a node-id at top of value stack")
+	};
 	assert_nodes(expr, &parser.nodes, tester.0, &tester.1, 0);
 	Ok(())
 }
@@ -498,7 +503,7 @@ fn while_stmt() -> miette::Result<()> {
 	let eq = t.binary(BinaryOp::CmpEq, a, b)?;
 	t.while_s(eq, &[b]);
 	t.0 = t.block(&[]);
-	parse_test("while a == b {b}", &t)
+	parse_test("while 3 == 2 {1}", &t)
 }
 
 #[test]

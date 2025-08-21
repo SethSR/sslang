@@ -36,10 +36,23 @@ pub(crate) type Scope = HashMap<Rc<str>, NodeId>;
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct ScopeTracker(Vec<Scope>);
 
+struct FunDef {
+	params: Vec<(Rc<str>, ValueType)>,
+	rtype: ValueType,
+}
+
+type FunDefStorage = HashMap<Rc<str>, FunDef>;
+
+struct RecDef {
+	fields: Vec<(Rc<str>, ValueType)>,
+}
+
+type RecDefStorage = HashMap<Rc<str>, RecDef>;
+
 #[derive(Debug)]
 pub(crate) enum StackOp {
 	Param(TokenType),
-	Block(TokenType),
+	Block(TokenType, usize),
 	Expr(u8),
 	ExprEnd(u8),
 	BinaryOp(BinaryOp),
@@ -50,6 +63,9 @@ pub(crate) enum StackOp {
 	Fun,
 	FunRet,
 	FunEnd,
+	Call,
+	CallArg,
+	CallEnd,
 	Var,
 	VarEnd(TokenType),
 	While,
@@ -80,8 +96,8 @@ pub(crate) struct Parser {
 
 	// TODO - srenshaw - All of these fields will probably be moved into a Scope structure.
 	pub(crate) nodes: NodeStore,
-	pub(crate) records: HashSet<Rc<str>>,
-	pub(crate) functions: HashSet<Rc<str>>,
+	pub(crate) records: HashSet<Rc<str>>, //RecDefStorage,
+	pub(crate) functions: HashSet<Rc<str>>, //FunDefStorage,
 
 	// Stack
 	pub(crate) stack: Vec<StackOp>,
@@ -107,7 +123,7 @@ impl Parser {
 			records: HashSet::default(),
 			functions: HashSet::default(),
 
-			stack: vec![StackOp::Block(TokenType::Eof)],
+			stack: vec![StackOp::Block(TokenType::Eof, 0)],
 			values: vec![],
 			ast: vec![],
 		}
@@ -142,7 +158,7 @@ impl Parser {
 		match self.stack.pop() {
 			Some(StackOp::Param(closing_token)) => self.param(closing_token),
 
-			Some(StackOp::Block(closing_token)) => self.block(closing_token),
+			Some(StackOp::Block(closing_token, count)) => self.block(closing_token, count),
 
 			Some(StackOp::Expr(min_bp)) => self.expr(min_bp),
 			Some(StackOp::ExprEnd(min_bp)) => self.expr_end(min_bp),
@@ -153,6 +169,10 @@ impl Parser {
 			Some(StackOp::Fun) => self.fun_start(),
 			Some(StackOp::FunRet) => self.fun_return(),
 			Some(StackOp::FunEnd) => self.fun_end(),
+
+			Some(StackOp::Call) => self.call_start(),
+			Some(StackOp::CallArg) => self.call_arg(),
+			Some(StackOp::CallEnd) => self.call_end(),
 
 			Some(StackOp::Var) => self.var_start(),
 			Some(StackOp::VarEnd(end_token)) => self.var_end(end_token),
@@ -406,7 +426,7 @@ impl Parser {
 
 		self.values.push(StackValue::Scope(self.scopes.clone()));
 		self.stack.push(StackOp::IfElse);
-		self.stack.push(StackOp::Block(TokenType::CBrace));
+		self.stack.push(StackOp::Block(TokenType::CBrace, 0));
 		Ok("Parsed header for IF expression".into())
 	}
 
@@ -425,7 +445,7 @@ impl Parser {
 			self.values.push(StackValue::NodeId(then_body));
 			self.values.push(StackValue::Scope(t_scopes));
 			self.stack.push(StackOp::IfEnd);
-			self.stack.push(StackOp::Block(TokenType::CBrace));
+			self.stack.push(StackOp::Block(TokenType::CBrace, 0));
 			Ok("Parsed then-branch for IF expression".into())
 		} else {
 			let (then_body, mut f_scopes) = self.get_if_tail("if_else")?;
@@ -508,66 +528,7 @@ impl Parser {
 		Ok((start, cond, scope.clone()))
 	}
 
-	fn expr_call(&mut self, lhs: NodeId, info: TokenInfo) -> Result<NodeId> {
-		let lhs_node = self.nodes.get(lhs)?.clone();
-		match lhs_node.expr {
-			Expr::Id(name) => {
-				self.index += 1;
-				// TODO - srenshaw - Need to reimplement Argument parsing
-				// let args = self.args().unwrap_or_default();
-				let args = vec![];
-
-				if self.match_token(TokenType::CParen).is_err() {
-					return Err(expected(self, ")"));
-				}
-
-				if self.functions.contains(&name) {
-					if let Some(rx) = self.scopes.find(&name) {
-						let def = self.nodes.get(rx)?;
-
-						if let Expr::Fun { params, rtype, ..} = &def.expr {
-							assert_eq!(args.len(), params.len(),
-								"mismatched argument and parameter lists");
-							let rtype = rtype.clone();
-							let nx = self.nodes.new_call(&name, args, lhs_node.info.start..info.end);
-							let node = self.nodes.get_mut(nx)
-								.unwrap();
-							node.kind = rtype;
-							return Ok(nx);
-						}
-					}
-				}
-
-				Err(Error::report(&self.source, info, "here",
-					&format!("Call to unknown function '{name}'"),
-				))
-			}
-
-			Expr::Fun { name, params, rtype, ..} => {
-				self.index += 1;
-				// TODO - srenshaw - Need to reimplement Argument parsing
-				// let args = self.args().unwrap_or_default();
-				let args = vec![];
-
-				if self.match_token(TokenType::CParen).is_err() {
-					return Err(expected(self, ")"));
-				}
-
-				assert_eq!(args.len(), params.len(),
-					"mismatched argument and parameter lists");
-				let rtype = rtype.clone();
-				let nx = self.nodes.new_call(&name, args, info);
-				let node = self.nodes.get_mut(nx)
-					.unwrap();
-				node.kind = rtype;
-				Ok(nx)
-			},
-			expr => Err(Error::report(&self.source, lhs_node.info, "here",
-				&format!("BLAH BLAH BLAH - Expected ID, found {expr}"))),
-		}
-	}
-
-	fn expr(&mut self, min_bp: u8) -> Result<Step> {
+	pub(crate) fn expr(&mut self, min_bp: u8) -> Result<Step> {
 		use TokenType as TT;
 
 		self.stack.push(StackOp::ExprEnd(min_bp));
@@ -603,10 +564,10 @@ impl Parser {
 				// initialization, "ident -> block" sequences, function-calls, and assignment.
 				if self.peek(1).tt == TokenType::OParen {
 					let info = token.range();
-					let id = self.nodes.new_id(&s, ValueType::Any, info.clone());
 					self.index += 1;
-					let nx = self.expr_call(id, info)?;
-					self.values.push(StackValue::NodeId(nx));
+					self.values.push(StackValue::InfoStart(info.start as u16));
+					self.values.push(StackValue::Ident(s));
+					self.stack.push(StackOp::Call);
 					Ok("Parsed FUNCTION-CALL expression".into())
 				// TODO - srenshaw - Need to reimplement Record Initializer Values
 				// } else if self.peek(1).tt == TokenType::OBrace && self.peek(3).tt == TokenType::Colon {
@@ -676,7 +637,7 @@ impl Parser {
 			}
 			TT::OBrace => {
 				// Open block
-				self.stack.push(StackOp::Block(TokenType::CBrace));
+				self.stack.push(StackOp::Block(TokenType::CBrace, 0));
 				Ok("Found '{'".into())
 			}
 			TT::CBrace => {
@@ -711,23 +672,11 @@ impl Parser {
 			TT::S8 | TT::S16 | TT::S32 |
 			TT::F16(_) | TT::F32(_) |
 			TT::OBrace | TT::CBrace | TT::CParen |
-			TT::Colon => Ok("End of expression".into()),
+			TT::Colon | TT::Eof => Ok("End of expression".into()),
 
 			TT::Semicolon => {
 				self.index += 1;
 				Ok("End of expression".into())
-			}
-
-			TT::Eof => Err(error(self, "unexpected EoF")),
-
-			TT::OParen => {
-				let Some(StackValue::NodeId(lhs)) = self.values.pop() else {
-					return Err(error(self, "missing IDENTIFIER for function call"));
-				};
-				let lhs = self.expr_call(lhs, token.range())?;
-				self.values.push(StackValue::NodeId(lhs));
-				self.stack.push(StackOp::ExprEnd(min_bp));
-				Ok("Continuing expression parsing - fn-call".into())
 			}
 
 			tt => {
@@ -750,29 +699,35 @@ impl Parser {
 		}
 	}
 
-	fn block(&mut self, closing_token: TokenType) -> Result<Step> {
+	fn block(&mut self, closing_token: TokenType, count: usize) -> Result<Step> {
+		// NOTE - srenshaw - Don't consume the closing token, as that will be
+		// handled by the return-site.
 		if self.peek(0).tt == closing_token {
 			let mut body = None;
-			while let Some(StackValue::NodeId(nx)) = self.values.last() {
+			for i in 0..count {
+				let Some(StackValue::NodeId(nx)) = self.values.last() else {
+					return Err(error(self, &format!("expected {count} items in block, found {i}")));
+				};
 				body = Some(*nx);
 				self.values.pop();
 			}
-			return if let Some(scope) = self.scopes.pop() {
+
+			if let Some(scope) = self.scopes.pop() {
 				let nx = self.nodes.new_block(body, scope, 0..0);
 				self.values.push(StackValue::NodeId(nx));
 				Ok("Finished parsing Block".into())
 			} else {
 				Err(error(self, "empty scope-list in `parser::block2`"))
-			};
+			}
+		} else {
+			// We'll need to return here after we try to parse an expression
+			self.stack.push(StackOp::Block(closing_token, count + 1));
+
+			// This is the expression we'll attempt to parse
+			self.stack.push(StackOp::Expr(0));
+
+			Ok("Parsing Expression".into())
 		}
-
-		// We'll need to return here after we try to parse an expression
-		self.stack.push(StackOp::Block(closing_token));
-
-		// This is the expression we'll attempt to parse
-		self.stack.push(StackOp::Expr(0));
-
-		Ok("Parsing Expression".into())
 	}
 
 	fn param(&mut self, closing_token: TokenType) -> Result<Step> {
@@ -868,7 +823,7 @@ impl Parser {
 		self.stack.push(StackOp::FunEnd);
 		// Start a new scope for the function body
 		self.scopes.push();
-		self.stack.push(StackOp::Block(TokenType::CBrace));
+		self.stack.push(StackOp::Block(TokenType::CBrace, 0));
 
 		Ok(out.into())
 	}
@@ -909,6 +864,52 @@ impl Parser {
 		Ok(out.into())
 	}
 
+	fn call_start(&mut self) -> Result<Step> {
+		self.match_token(TokenType::OParen)?;
+		if self.match_token(TokenType::CParen).is_ok() {
+			// no function arguments, jump to call-end
+			self.stack.push(StackOp::CallEnd);
+		} else {
+			self.stack.push(StackOp::CallArg);
+			self.stack.push(StackOp::Expr(0));
+		}
+		Ok("parsed header for FN-CALL".into())
+	}
+
+	fn call_arg(&mut self) -> Result<Step> {
+		if self.match_token(TokenType::Comma).is_ok() {
+			self.stack.push(StackOp::CallArg);
+			self.stack.push(StackOp::Expr(0));
+			Ok("parsed FN-CALL arg".into())
+		} else {
+			self.stack.push(StackOp::CallEnd);
+			Ok("finished FN-CALL args".into())
+		}
+	}
+
+	fn call_end(&mut self) -> Result<Step> {
+		self.match_token(TokenType::CParen)?;
+		let end = self.peek(-1).range().end;
+
+		let mut args = vec![];
+		while let Some(StackValue::NodeId(nx)) = self.values.last() {
+			args.push(*nx);
+			self.values.pop();
+		}
+
+		let Some(StackValue::Ident(name)) = self.values.pop() else {
+			return Err(error(self, "missing name for FN-CALL"));
+		};
+
+		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+			return Err(error(self, "missing info for FN-CALL"));
+		};
+
+		let nx = self.nodes.new_call(&name, args, start as usize..end);
+		self.values.push(StackValue::NodeId(nx));
+		Ok(format!("Finished parsing FN-CALL '{name}' [{nx}]").into())
+	}
+
 	fn var_start(&mut self) -> Result<Step> {
 		let start = self.peek(0).start;
 		self.match_token(TokenType::Var)?;
@@ -929,7 +930,7 @@ impl Parser {
 			self.stack.push(StackOp::VarEnd(TokenType::CBrace));
 			// Start a new scope for the variable block.
 			self.scopes.push();
-			self.stack.push(StackOp::Block(TokenType::CBrace));
+			self.stack.push(StackOp::Block(TokenType::CBrace, 0));
 		} else {
 			// Finish parsing the variable after we're done with the body.
 			self.stack.push(StackOp::VarEnd(TokenType::Semicolon));
@@ -987,7 +988,7 @@ impl Parser {
 		self.match_token(TokenType::OBrace)?;
 		self.stack.push(StackOp::WhileEnd);
 		self.scopes.push();
-		self.stack.push(StackOp::Block(TokenType::CBrace));
+		self.stack.push(StackOp::Block(TokenType::CBrace, 0));
 		Ok("Parsed condition for WHILE loop".into())
 	}
 
@@ -1007,7 +1008,8 @@ impl Parser {
 			return Err(error(self, "Expected INFO value in 'while_end'"));
 		};
 
-		self.nodes.new_while(cond, body, start as usize..end);
+		let nx = self.nodes.new_while(cond, body, start as usize..end);
+		self.values.push(StackValue::NodeId(nx));
 		Ok("Parsed WHILE loop".into())
 	}
 }

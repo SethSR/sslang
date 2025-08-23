@@ -6,7 +6,7 @@ use miette::{LabeledSpan, IntoDiagnostic, WrapErr};
 
 use crate::tokens::{Token, TokenType};
 
-use super::{BinaryOp, Expr, Fix, Int, TokenInfo, UnaryOp, ValueType};
+use super::{BinaryOp, Expr, Fix, Int, UnaryOp, ValueType};
 use super::error::Error;
 use super::node::{NodeId, NodeStore};
 
@@ -58,8 +58,11 @@ pub(crate) enum StackOp {
 	BinaryOp(BinaryOp),
 	UnaryOp(UnaryOp),
 
-	Rec,
-	RecEnd,
+	RecDef,
+	RecDefEnd,
+	RecInit,
+	RecInitParams(usize),
+	RecInitEnd(usize),
 	Fun,
 	FunRet,
 	FunEnd,
@@ -67,7 +70,7 @@ pub(crate) enum StackOp {
 	CallArg,
 	CallEnd,
 	Var,
-	VarEnd(TokenType),
+	VarEnd,
 	While,
 	WhileBody,
 	WhileEnd,
@@ -160,11 +163,15 @@ impl Parser {
 
 			Some(StackOp::Block(closing_token, count)) => self.block(closing_token, count),
 
-			Some(StackOp::Expr(min_bp)) => self.expr(min_bp),
+			Some(StackOp::Expr(min_bp)) => self.expr_start(min_bp),
 			Some(StackOp::ExprEnd(min_bp)) => self.expr_end(min_bp),
 
-			Some(StackOp::Rec) => self.rec_start(),
-			Some(StackOp::RecEnd) => self.rec_end(),
+			Some(StackOp::RecDef) => self.rec_start(),
+			Some(StackOp::RecDefEnd) => self.rec_end(),
+
+			Some(StackOp::RecInit) => self.rec_init_start(),
+			Some(StackOp::RecInitParams(count)) => self.rec_init_params(count),
+			Some(StackOp::RecInitEnd(count)) => self.rec_init_end(count),
 
 			Some(StackOp::Fun) => self.fun_start(),
 			Some(StackOp::FunRet) => self.fun_return(),
@@ -175,7 +182,7 @@ impl Parser {
 			Some(StackOp::CallEnd) => self.call_end(),
 
 			Some(StackOp::Var) => self.var_start(),
-			Some(StackOp::VarEnd(end_token)) => self.var_end(end_token),
+			Some(StackOp::VarEnd) => self.var_end(),
 
 			Some(StackOp::While) => self.while_start(),
 			Some(StackOp::WhileBody) => self.while_body(),
@@ -528,7 +535,7 @@ impl Parser {
 		Ok((start, cond, scope.clone()))
 	}
 
-	pub(crate) fn expr(&mut self, min_bp: u8) -> Result<Step> {
+	pub(crate) fn expr_start(&mut self, min_bp: u8) -> Result<Step> {
 		use TokenType as TT;
 
 		self.stack.push(StackOp::ExprEnd(min_bp));
@@ -536,7 +543,7 @@ impl Parser {
 		let token = self.peek(0);
 		match token.tt {
 			TT::Rec => {
-				self.stack.push(StackOp::Rec);
+				self.stack.push(StackOp::RecDef);
 				Ok("Found RECORD declaration".into())
 			}
 			TT::Fun => {
@@ -559,28 +566,27 @@ impl Parser {
 			// identifier, we'll need to fix this at some point.
 			TT::Ident(ref s) => {
 				let s = s.clone();
+				let info = token.range();
+				self.index += 1;
 
 				// HACK - srenshaw - We probably need a more robust way to distinguish between Record
 				// initialization, "ident -> block" sequences, function-calls, and assignment.
+				// TODO - srenshaw - Really we should look this name up to see whether it's
+				// a function, variable, or record name, then act appropriately.
 				if self.peek(1).tt == TokenType::OParen {
-					let info = token.range();
-					self.index += 1;
 					self.values.push(StackValue::InfoStart(info.start as u16));
 					self.values.push(StackValue::Ident(s));
 					self.stack.push(StackOp::Call);
-					Ok("Parsed FUNCTION-CALL expression".into())
-				// TODO - srenshaw - Need to reimplement Record Initializer Values
-				// } else if self.peek(1).tt == TokenType::OBrace && self.peek(3).tt == TokenType::Colon {
-				// 	let nx = self.expr_rec_init()?;
-				// 	self.values.push(StackValue::NodeId(nx));
-				// 	Ok("Parsed RECORD initializer expression".into())
+					Ok("Starting FUNCTION-CALL expression".into())
+				} else if self.peek(1).tt == TokenType::OBrace && self.peek(3).tt == TokenType::Colon {
+					self.values.push(StackValue::InfoStart(info.start as u16));
+					self.values.push(StackValue::Ident(s));
+					self.stack.push(StackOp::RecInit);
+					Ok("Starting RECORD initializer expression".into())
 				} else if let Some(nx) = self.scopes.find(&s) {
 					self.values.push(StackValue::NodeId(nx));
-					self.index += 1;
 					Ok(format!("Parsed IDENTIFIER '{s}' [{nx}]").into())
 				} else {
-					let info = token.range();
-					self.index += 1;
 					Err(Error::fatal(&self.source, info, &format!("Unknown IDENTIFIER '{s}'")))
 				}
 			}
@@ -765,7 +771,7 @@ impl Parser {
 		let out = format!("Parsed header for RECORD '{name}'");
 		self.values.push(StackValue::Ident(name));
 		self.values.push(StackValue::InfoStart(start));
-		self.stack.push(StackOp::RecEnd);
+		self.stack.push(StackOp::RecDefEnd);
 		self.stack.push(StackOp::Param(TokenType::CBrace));
 		Ok(out.into())
 	}
@@ -795,6 +801,64 @@ impl Parser {
 		self.records.insert(name);
 		self.ast.push(nx);
 		Ok(out.into())
+	}
+
+	fn rec_init_start(&mut self) -> Result<Step> {
+		self.match_token(TokenType::OBrace)?;
+		if self.match_token(TokenType::CBrace).is_ok() {
+			self.stack.push(StackOp::RecInitEnd(0));
+			Ok("Parsed header for REC-INIT".into())
+		} else {
+			self.rec_init_param(0)
+		}
+	}
+
+	fn rec_init_params(&mut self, count: usize) -> Result<Step> {
+		if self.match_token(TokenType::Comma).is_ok() {
+			self.rec_init_param(count)
+		} else {
+			self.match_token(TokenType::CBrace)?;
+			self.stack.push(StackOp::RecInitEnd(count));
+			Ok("End of REC-INIT params".into())
+		}
+	}
+
+	fn rec_init_param(&mut self, count: usize) -> Result<Step> {
+		let name = self.ident()?;
+		self.match_token(TokenType::Colon)?;
+		self.values.push(StackValue::Ident(name));
+		self.stack.push(StackOp::RecInitParams(count + 1));
+		self.stack.push(StackOp::Expr(0));
+		Ok("Parsed REC-INIT param".into())
+	}
+
+	fn rec_init_end(&mut self, count: usize) -> Result<Step> {
+		let end = self.peek(-1).range().end;
+
+		let mut params = vec![];
+		for i in 0..count {
+			let Some(StackValue::NodeId(expr)) = self.values.pop() else {
+				return Err(error(self, &format!("expected {count} expressions in block, found {i}")));
+			};
+
+			let Some(StackValue::Ident(name)) = self.values.pop() else {
+				return Err(error(self, &format!("expected {count} names in block, found {i}")));
+			};
+
+			params.push((name, expr));
+		}
+
+		let Some(StackValue::Ident(name)) = self.values.pop() else {
+			todo!()
+		};
+
+		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+			todo!()
+		};
+
+		let nx = self.nodes.new_rec_init(&name, params, start as usize..end);
+		self.values.push(StackValue::NodeId(nx));
+		Ok("Parsed REC-INIT expression".into())
 	}
 
 	fn fun_start(&mut self) -> Result<Step> {
@@ -921,28 +985,27 @@ impl Parser {
 
 		let out = format!("Parsed header for VARIABLE '{name}'");
 		// Push the header marker.
-		self.values.push(StackValue::Ident(name));
 		self.values.push(StackValue::InfoStart(start));
+		self.values.push(StackValue::Ident(name));
 		self.values.push(StackValue::Type(vtype));
 
 		if self.match_token(TokenType::OBrace).is_ok() {
 			// Finish parsing the variable after we're done with the block.
-			self.stack.push(StackOp::VarEnd(TokenType::CBrace));
+			self.stack.push(StackOp::VarEnd);
 			// Start a new scope for the variable block.
 			self.scopes.push();
 			self.stack.push(StackOp::Block(TokenType::CBrace, 0));
 		} else {
 			// Finish parsing the variable after we're done with the body.
-			self.stack.push(StackOp::VarEnd(TokenType::Semicolon));
+			self.stack.push(StackOp::VarEnd);
 			self.stack.push(StackOp::Expr(0));
 		}
 
 		Ok(out.into())
 	}
 
-	fn var_end(&mut self, end_token: TokenType) -> Result<Step> {
-		let end = self.peek(0).range().end;
-		self.match_token(end_token)?;
+	fn var_end(&mut self) -> Result<Step> {
+		let end = self.peek(-1).range().end;
 
 		let Some(StackValue::NodeId(body)) = self.values.pop() else {
 			return Err(error(self, "Expected NODE_ID value in 'var_end'"));
@@ -952,12 +1015,12 @@ impl Parser {
 			return Err(error(self, "Expected TYPE value in 'var_end'"));
 		};
 
-		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
-			return Err(error(self, "expected INFO value in 'var_end'"));
-		};
-
 		let Some(StackValue::Ident(name)) = self.values.pop() else {
 			return Err(error(self, "Expected IDENTIFIER value in 'var_end'"));
+		};
+
+		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+			return Err(error(self, "expected INFO value in 'var_end'"));
 		};
 
 		// Add to the current scope.
@@ -972,6 +1035,7 @@ impl Parser {
 			self.nodes.new_var(&name, vtype, Some(body), start as usize..end)
 		};
 
+		self.values.push(StackValue::NodeId(nx));
 		Ok(format!("Parsed VARIABLE '{name}' [{nx}]").into())
 	}
 

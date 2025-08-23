@@ -134,7 +134,7 @@ fn expr_test(source: &str, tester: &Tester) -> miette::Result<()> {
 	let input = lexer::eval(source)?;
 	let mut parser = Parser::new(source, &input);
 	parser.scopes.add(Scope::default());
-	parser.expr(0)?;
+	parser.expr_start(0)?;
 	let Some(StackValue::NodeId(expr)) = parser.values.pop() else {
 		panic!("expected a node-id at top of value stack")
 	};

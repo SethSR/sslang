@@ -30,10 +30,11 @@ pub(crate) struct Output {
 
 pub(crate) fn nodes_to_string(nx: NodeId, ns: &NodeStore, mut padding: usize, out: &mut Vec<String>) {
 	let node = ns.get(nx);
+	let space = "  ".repeat(padding);
 	match node {
 		Ok(node) => {
-			out.push(format!("[{nx:3}] {:>1$}{node}", "> ", padding));
-			padding += 2;
+			out.push(format!("[{nx:3}] {space}> {node}"));
+			padding += 1;
 			match &node.expr {
 				Expr::Block{body,..} => {
 					if let Some(bx) = body {
@@ -87,7 +88,7 @@ pub(crate) fn nodes_to_string(nx: NodeId, ns: &NodeStore, mut padding: usize, ou
 			}
 		}
 		Err(e) => {
-			out.push(format!("[{nx}] {:>1$}ERROR: {e}", "> ", padding));
+			out.push(format!("[{nx}] {space}> ERROR: {e}"));
 		}
 	}
 }
@@ -112,20 +113,7 @@ pub fn eval(
 	}
 
 	let mut parser = Parser::new(source, &input);
-	loop {
-		match parser.step() {
-			Ok(Step::Next(msg)) => println!("[step] {msg}"),
-			Err(Error::Report(e)) => eprintln!("[erep] {e}"),
-			Err(Error::Fatal(e)) => {
-				eprintln!("[exit] {e}");
-				break;
-			}
-			Ok(Step::Done) => {
-				println!("[done] Finished");
-				break;
-			}
-		}
-	}
+	while parser.step_and_continue(false) {}
 
 	let out = match parser.finish() {
 		Ok(out) => out,

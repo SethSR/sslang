@@ -154,20 +154,7 @@ fn main() -> miette::Result<()> {
 
 	info!("parsing");
 	let mut stepper = parser::Parser::new(source, &tokens);
-	loop {
-		match stepper.step() {
-			Ok(Step::Next(msg)) => println!("[step] {msg}"),
-			Err(Error::Report(e)) => eprintln!("[erep] {e}"),
-			Err(Error::Fatal(e)) => {
-				eprintln!("[exit] {e}");
-				break;
-			}
-			Ok(Step::Done) => {
-				println!("[done] Finished");
-				break;
-			}
-		}
-	}
+	while stepper.step_and_continue(true) {}
 	let out = stepper.finish()?;
 	if options.debug.contains(&Stage::Parser) {
 		debug!("Start ID: {}", out.start);
@@ -400,20 +387,13 @@ impl AppData {
 								}
 								AppState::Parsing(mut parser) => {
 									if let Some(mut parser) = parser.take() {
-										loop {
-											match parser.step() {
-												Ok(Step::Next(msg)) => self.status = format!("[step] {msg}"),
-												Err(Error::Report(e)) => self.status = format!("[erep] {e}"),
-												Err(Error::Fatal(e)) => {
-													self.status = format!("[exit] {e}");
-													break;
-												}
-												Ok(Step::Done) => {
-													self.status = "[done] Finished".into();
-													break;
-												}
-											}
-										}
+										while parser.step_with_action(
+											|m,s| { *s = m; true },
+											|m,s| { *s = m; false },
+											|m,s| { *s = m; true },
+											|m,s| { *s = m; false },
+											&mut self.status,
+										) {}
 
 										match parser.finish() {
 											Ok(out) => AppState::Done(out.start, out.store),
@@ -456,19 +436,15 @@ impl AppData {
 
 								AppState::Parsing(ref mut parser) => {
 									if let Some(mut parser) = parser.take() {
-										match parser.step() {
-											Ok(Step::Next(msg)) => {
-												self.status = format!("[step] {msg}");
-												self.state = AppState::Parsing(Some(parser));
-												continue;
-											}
-											Err(Error::Report(e)) => {
-												self.status = format!("[erep] {e}");
-												self.state = AppState::Parsing(Some(parser));
-												continue;
-											}
-											Err(Error::Fatal(e)) => self.status = format!("[exit] {e}"),
-											Ok(Step::Done) => self.status = "[done] Finished".into(),
+										if parser.step_with_action(
+											|m,out| { *out = m; true },
+											|m,out| { *out = m; false },
+											|m,out| { *out = m; true },
+											|m,out| { *out = m; false },
+											&mut self.status,
+										) {
+											self.state = AppState::Parsing(Some(parser));
+											continue
 										}
 
 										self.state = match parser.finish() {

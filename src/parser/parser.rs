@@ -157,6 +157,45 @@ impl From<String> for Step {
 }
 
 impl Parser {
+	#[inline]
+	pub(crate) fn step_and_continue(
+		&mut self,
+		continue_on_error: bool,
+	) -> bool {
+		self.step_with_action(
+			|s,_| {  println!("{s}"); true },
+			|s,_| {  println!("{s}"); false },
+			|s,_| { eprintln!("{s}"); continue_on_error },
+			|s,_| { eprintln!("{s}"); false },
+			&mut String::new(),
+		)
+	}
+
+	#[inline]
+	pub(crate) fn step_with_action<T>(
+		&mut self,
+		on_next: impl FnOnce(String, &mut T) -> bool,
+		on_done: impl FnOnce(String, &mut T) -> bool,
+		on_erep: impl FnOnce(String, &mut T) -> bool,
+		on_exit: impl FnOnce(String, &mut T) -> bool,
+		out: &mut T,
+	) -> bool {
+		match self.step() {
+			Ok(Step::Next(s)) => {
+				on_next(format!("[step] {s}"), out)
+			}
+			Ok(Step::Done) => {
+				on_done(format!("[done] FIN"), out)
+			}
+			Err(Error::Report(e)) => {
+				on_erep(format!("[erep] {e}"), out)
+			}
+			Err(Error::Fatal(e)) => {
+				on_exit(format!("[exit] {e}"), out)
+			}
+		}
+	}
+
 	pub(crate) fn step(&mut self) -> Result<Step> {
 		match self.stack.pop() {
 			Some(StackOp::Param(closing_token)) => self.param(closing_token),
@@ -677,9 +716,10 @@ impl Parser {
 			TT::U8 | TT::U16 | TT::U32 |
 			TT::S8 | TT::S16 | TT::S32 |
 			TT::F16(_) | TT::F32(_) |
-			TT::OBrace | TT::CBrace | TT::CParen |
+			TT::OBrace | TT::CBrace |
 			TT::Colon | TT::Eof => Ok("End of expression".into()),
 
+			TT::CParen |
 			TT::Semicolon => {
 				self.index += 1;
 				Ok("End of expression".into())
@@ -698,8 +738,7 @@ impl Parser {
 					self.stack.push(StackOp::Expr(r_bp));
 					Ok("Continuing expression parsing - binop".into())
 				} else {
-					self.stack.push(StackOp::ExprEnd(min_bp));
-					Ok(format!("Continuing expression parsing - '{tt:?}'").into())
+					panic!("unexpected token '{tt:?}'");
 				}
 			}
 		}
@@ -952,7 +991,6 @@ impl Parser {
 	}
 
 	fn call_end(&mut self) -> Result<Step> {
-		self.match_token(TokenType::CParen)?;
 		let end = self.peek(-1).range().end;
 
 		let mut args = vec![];

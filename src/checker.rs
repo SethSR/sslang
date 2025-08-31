@@ -31,7 +31,7 @@ fn update_types(
 		.cloned()
 		.expect("missing node in node_store");
 
-	eprintln!("[{nx:>3}]{:>1$}({kind}): {expr}", ' ', indent);
+	eprintln!("[{nx:>3?}]{:>1$}({kind}): {expr}", ' ', indent);
 	eprintln!("SCOPE: {scopes:?}");
 
 	match expr {
@@ -83,7 +83,7 @@ fn update_types(
 				let fx = scopes.find(&f_name)
 					.unwrap_or_else(|| panic!("- missing '{f_name}' in scopes\n\n{scopes:?}"));
 				let rec = n_store.get(fx).cloned()
-					.unwrap_or_else(|_| panic!("- missing index {fx} in node_store"));
+					.unwrap_or_else(|_| panic!("- missing index {fx:?} in node_store"));
 				let Expr::Rec {..} = rec.expr else {
 					eprintln!("- expected a Record for '{f_name}' identifier, found {rec:?}");
 					return;
@@ -153,7 +153,7 @@ fn update_types(
 			let cx = scopes.find(&name)
 				.unwrap_or_else(|| panic!("- missing '{name}' in scopes"));
 			let call = n_store.get(cx).cloned()
-				.unwrap_or_else(|_| panic!("- missing index {cx} in node_store"));
+				.unwrap_or_else(|_| panic!("- missing index {cx:?} in node_store"));
 			let Expr::Fun { params, rtype, ..} = &call.expr else {
 				return;
 			};
@@ -171,7 +171,7 @@ fn update_types(
 
 				let px = params[idx];
 				let param = n_store.get(px)
-					.unwrap_or_else(|_| panic!("- missing index {px} in node_store"));
+					.unwrap_or_else(|_| panic!("- missing index {px:?} in node_store"));
 				let Expr::Id(pname) = &param.expr else {
 					return;
 				};
@@ -196,7 +196,7 @@ fn update_types(
 
 			for fx in fields {
 				let field = n_store.get(fx)
-					.unwrap_or_else(|_| panic!("- missing index {fx} in node_store"));
+					.unwrap_or_else(|_| panic!("- missing index {fx:?} in node_store"));
 				if let ValueType::Udt(fudt) = &field.kind {
 					if !r_store.contains(fudt) {
 						eprintln!("- unknown type '{fudt}' in Record Definition");
@@ -210,7 +210,7 @@ fn update_types(
 
 			for px in params {
 				let param = n_store.get(px)
-					.unwrap_or_else(|_| panic!("- missing index {px} in node_store"));
+					.unwrap_or_else(|_| panic!("- missing index {px:?} in node_store"));
 				if let ValueType::Udt(pudt) = &param.kind {
 					if !r_store.contains(pudt) {
 						eprintln!("- unknown type '{pudt}' in Function Definition");

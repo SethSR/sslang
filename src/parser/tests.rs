@@ -1,25 +1,50 @@
 
+use std::rc::Rc;
+
 use crate::lexer;
 
 use super::{
-	nodes_to_string,
 	BinaryOp,
+	Expr,
 	Int,
-	Node,
 	NodeId,
 	NodeStore,
+	Output,
+	Token,
 	TypedIdent,
 	UnaryOp,
 	ValueType as VT,
 };
 use super::parser::{Parser, Scope, ScopeTracker};
+use super::node::NodeRef;
+
+fn eval(
+	source: &str,
+	input: Vec<Token>,
+) -> miette::Result<Output> {
+	if input.is_empty() {
+		miette::bail!("Empty input");
+	}
+
+	let mut parser = Parser::new(source, &input);
+	while parser.step_and_continue(false) {}
+
+	let out = match parser.finish() {
+		Ok(out) => out,
+		Err(e) => miette::bail!("{e}"),
+	};
+
+	eprintln!("{}", out.store.get(out.start));
+
+	Ok(out)
+}
 
 struct Tester(NodeId, NodeStore, ScopeTracker);
 
 impl Default for Tester {
 	fn default() -> Self {
-		let mut scopes = ScopeTracker::default();
-		Self(0, NodeStore::default(), scopes)
+		let scopes = ScopeTracker::default();
+		Self(NodeId::default(), NodeStore::default(), scopes)
 	}
 }
 
@@ -34,7 +59,7 @@ impl Tester {
 	}
 
 	fn ident(&mut self, s: &str) -> NodeId {
-		self.1.new_id(&s.into(), VT::Any, 0..0)
+		self.1.new_id(s.into(), 0..0)
 	}
 
 	fn unary(&mut self, op: UnaryOp, rhs: NodeId) -> miette::Result<NodeId> {
@@ -56,8 +81,8 @@ impl Tester {
 		body: NodeId,
 	) -> NodeId {
 		let name = name.into();
-		let nx = self.1.new_var(&name, vtype, Some(body), 0..0);
-		self.2.insert(&name, nx);
+		let nx = self.1.new_var(&name, vtype.clone(), Some(body), 0..0);
+		self.2.insert(&name, vtype, nx);
 		nx
 	}
 
@@ -78,13 +103,11 @@ impl Tester {
 		body: &[NodeId],
 	) -> NodeId {
 		let name = name.into();
-		let params = params.iter()
-			.map(|(pname, ptype)| self.1.new_id(pname, ptype.clone(), 0..0))
-			.collect();
+		let params = params.to_vec();
 		self.2.push();
 		let body = self.block(body);
-		let nx = self.1.new_fun(&name, params, rtype, body, 0..0);
-		self.2.insert(&name, nx);
+		let nx = self.1.new_fun(&name, params, rtype.clone(), body, 0..0);
+		self.2.insert(&name, rtype, nx);
 		nx
 	}
 
@@ -94,11 +117,10 @@ impl Tester {
 		fields: &[TypedIdent],
 	) -> NodeId {
 		let name = name.into();
-		let fields = fields.iter()
-			.map(|(fname, ftype)| self.1.new_id(fname, ftype.clone(), 0..0))
-			.collect();
+		let fields = fields.to_vec();
 		let nx = self.1.new_rec(&name, fields, 0..0);
-		self.2.insert(&name, nx);
+		let type_name = VT::Udt(name.clone());
+		self.2.insert(&name, type_name, nx);
 		nx
 	}
 
@@ -127,252 +149,254 @@ impl Tester {
 	}
 }
 
+fn print_tokens(tokens: &[Token]) {
+	eprint!("Tokens:");
+	for token in tokens {
+		eprint!(" {token}");
+	}
+	eprintln!();
+}
+
+fn print_nodes<'a>(node_iter: impl Iterator<Item=NodeRef<'a>>) {
+	eprint!("Nodes:");
+	for node in node_iter {
+		eprint!(" {node}");
+	}
+	eprintln!();
+}
+
 fn expr_test(source: &str, tester: &Tester) -> miette::Result<()> {
 	use crate::parser::parser::StackValue;
 
 	eprintln!("Source: {source}");
 
-	let input = lexer::eval(source)?;
-	eprint!("Tokens:");
-	for token in &input {
-		eprint!(" {token}");
-	}
-	eprintln!();
+	let tokens = lexer::eval(source)?;
+	print_tokens(&tokens);
 
-	let mut parser = Parser::new(source, &input);
-	eprint!("Nodes:");
-	for (id, node) in parser.nodes.iter() {
-		eprint!(" ({id},{node})");
-	}
-	eprintln!();
+	let mut parser = Parser::new(source, &tokens);
+	print_nodes(parser.nodes.iter());
 
 	parser.scopes.add(Scope::default());
 	parser.expr_start(0)?;
 	let Some(StackValue::NodeId(expr)) = parser.values.pop() else {
 		panic!("expected a node-id at top of value stack")
 	};
-	assert_nodes(expr, &parser.nodes, tester.0, &tester.1, 0);
+	// assert_nodes(expr, &parser.nodes, tester.0, &tester.1, 0);
+	assert_eq!(parser.nodes.get(expr), tester.1.get(tester.0));
 	Ok(())
 }
 
-/*
-#[test]
-fn unary_op_deref() -> miette::Result<()> {
-	let mut t = Tester::default();
-	let nx = t.ident("a");
-	t.0 = t.unary(UnaryOp::Deref, nx)?;
-	expr_test("@a", &t)
+#[derive(Debug, Clone)]
+enum Pattern<'a> {
+	Const(i64),
+	BinOp(BinaryOp, Box<Pattern<'a>>, Box<Pattern<'a>>),
+	UnOp(UnaryOp, Box<Pattern<'a>>),
+	Block(Vec<Pattern<'a>>, Vec<Rc<str>>),
+	Id(&'a str),
+	Var(&'a str, VT, Box<Pattern<'a>>),
 }
 
-#[test]
-fn unary_op_neg() -> miette::Result<()> {
-	let mut t = Tester::default();
-	let nx = t.ident("a");
-	t.0 = t.unary(UnaryOp::Neg, nx)?;
-	expr_test("-a", &t)
+impl PartialEq<NodeRef<'_>> for Pattern<'_> {
+	fn eq(&self, rhs: &NodeRef<'_>) -> bool {
+		match (self, rhs.expr()) {
+			(Self::Const(a), Expr::Num) => *a == rhs.number(),
+			(Self::BinOp(op, lnx, rnx), Expr::Binary) => {
+				*op == rhs.binary_op() &&
+					**lnx == rhs.store.get(rhs.inputs()[0]) &&
+					**rnx == rhs.store.get(rhs.inputs()[1])
+			}
+			(Self::UnOp(op, rnx), Expr::Unary) => {
+				*op == rhs.unary_op() &&
+					**rnx == rhs.store.get(rhs.inputs()[0])
+			}
+			(Self::Block(patterns,scope), Expr::Block) => {
+				let rscope = rhs.scope();
+				patterns == &rhs.inputs().iter().map(|nx| rhs.store.get(*nx)).collect::<Vec<_>>() &&
+					scope.iter().all(|s| rscope.contains_key(s))
+			}
+			(Self::Id(id), Expr::Id) => {
+				**id == *rhs.name()
+			}
+			(Self::Var(_,vtype,rnx), _) => {
+				vtype == rhs.kind() &&
+					**rnx == *rhs
+			}
+			_ => {
+				eprintln!("END: {self:?}");
+				eprintln!("END: {rhs}");
+				panic!()
+			}
+		}
+	}
 }
 
-#[test]
-fn unary_op_not() -> miette::Result<()> {
-	let mut t = Tester::default();
-	let nx = t.ident("a");
-	t.0 = t.unary(UnaryOp::Not, nx)?;
-	expr_test("!a", &t)
+impl PartialEq<Pattern<'_>> for NodeRef<'_> {
+	fn eq(&self, rhs: &Pattern<'_>) -> bool {
+		rhs == self
+	}
 }
 
-#[test]
-fn unary_op_pos() -> miette::Result<()> {
-	let mut t = Tester::default();
-	let nx = t.ident("a");
-	t.0 = t.unary(UnaryOp::Pos, nx)?;
-	expr_test("+a", &t)
+fn const_int(n: i64) -> Pattern<'static> { Pattern::Const(n) }
+fn binop<'a>(op: BinaryOp, lhs: Pattern<'a>, rhs: Pattern<'a>) -> Pattern<'a> {
+	Pattern::BinOp(op, Box::new(lhs), Box::new(rhs))
 }
-
-#[test]
-fn unary_op_ref() -> miette::Result<()> {
-	let mut t = Tester::default();
-	let nx = t.ident("a");
-	t.0 = t.unary(UnaryOp::Ref, nx)?;
-	expr_test("$a", &t)
+fn unop<'a>(op: UnaryOp, rhs: Pattern<'a>) -> Pattern<'a> {
+	Pattern::UnOp(op, Box::new(rhs))
 }
-*/
-
-#[test]
-fn precedence() -> miette::Result<()> {
-	let mut t = Tester::default();
-	let a = t.num(1, VT::Int(Int::Bot));
-	let b = t.num(2, VT::Int(Int::Bot));
-	let c = t.num(3, VT::Int(Int::Bot));
-	let m = t.binary(BinaryOp::Mul, b, c)?;
-	let add = t.binary(BinaryOp::Add, a, m)?;
-	t.0 = t.block(&[add]);
-	parse_test("1 + 2 * 3", &t)
+fn block<'a>(items: &'a [Pattern<'a>]) -> Pattern<'a> {
+	let mut scope = vec![];
+	let mut patterns = vec![];
+	for item in items {
+		if let Pattern::Var(s,_,_) = item {
+			scope.push((*s).into());
+		} else {
+			patterns.push(item.clone());
+		}
+	}
+	Pattern::Block(patterns, scope)
 }
-
-#[test]
-fn precedence2() -> miette::Result<()> {
-	let mut t = Tester::default();
-	let a = t.num(1, VT::Int(Int::Bot));
-	let b = t.num(2, VT::Int(Int::Bot));
-	let c = t.num(3, VT::Int(Int::Bot));
-	let m = t.binary(BinaryOp::Mul, a, b)?;
-	let add = t.binary(BinaryOp::Add, m, c)?;
-	t.0 = t.block(&[add]);
-	parse_test("1 * 2 + 3", &t)
+fn id<'a>(id: &'a str) -> Pattern<'a> {
+	Pattern::Id(id)
 }
-
-#[test]
-fn parentheses() -> miette::Result<()> {
-	let mut t = Tester::default();
-	let a = t.num(1, VT::Int(Int::Bot));
-	let b = t.num(2, VT::Int(Int::Bot));
-	let c = t.num(3, VT::Int(Int::Bot));
-	let add = t.binary(BinaryOp::Add, b, c)?;
-	let mul = t.binary(BinaryOp::Mul, a, add)?;
-	t.0 = t.block(&[mul]);
-	parse_test("1 * (2 + 3)", &t)
+fn var<'a>(id: &'a str, vtype: VT, expr: Pattern<'a>) -> Pattern<'a> {
+	Pattern::Var(id, vtype, Box::new(expr))
 }
 
 fn parse_test(
 	input: &str,
-	tester: &Tester,
+	pattern: Pattern,
 ) -> miette::Result<()> {
 	eprintln!("input: {input}");
-	let tokens = lexer::eval(input)?;
-	eprint!("tokens:");
-	for token in &tokens {
-		eprint!(" {token}");
-	}
-	eprintln!();
 
-	let out = super::eval(input, tokens)?;
-	assert_eq!(out.scopes, tester.2);
-	let mut out_strs = vec![];
-	nodes_to_string(out.start, &out.store, 0, &mut out_strs);
-	let mut test_strs = vec![];
-	nodes_to_string(tester.0, &tester.1, 0, &mut test_strs);
-	assert_eq!(out_strs, test_strs, "Left:\n{}\nRight:\n{}", out_strs.join("\n"), test_strs.join("\n"));
+	let tokens = lexer::eval(input)?;
+	print_tokens(&tokens);
+
+	let out = eval(input, tokens)?;
+	assert_eq!(out.store.get(out.start), pattern);
+
 	Ok(())
 }
 
-fn assert_nodes(nxa: NodeId, sa: &NodeStore, nxb: NodeId, sb: &NodeStore, indent: u8) {
-	use crate::parser::Expr;
-
-	fn show_error(nxa: NodeId, sa: &NodeStore, nxb: NodeId, sb: &NodeStore) -> String {
-		let mut outa = vec![];
-		nodes_to_string(nxa, sa, 2, &mut outa);
-		let mut outb = vec![];
-		nodes_to_string(nxb, sb, 2, &mut outb);
-		format!("A:\n{}\nB:\n{}",
-			outa.join("\n"),
-			outb.join("\n"),
-		)
-	}
-
-	match (sa.get(nxa), sb.get(nxb)) {
-		(Ok(Node { expr: a, ..}), Ok(Node { expr: b, ..})) => match (a, b) {
-			(Expr::Id(ia), Expr::Id(ib)) => assert_eq!(ia, ib),
-			(Expr::Num(na), Expr::Num(nb)) => assert_eq!(na, nb),
-			(Expr::Block{body:ba,..}, Expr::Block{body:bb,..}) => {
-				assert_eq!(ba, bb, "{}", show_error(nxa, sa, nxb, sb));
-			}
-			(Expr::Rec { name: na, ..}, Expr::Rec { name: nb, ..}) => assert_eq!(na, nb),
-			(
-				Expr::Fun { name: na, params: pa, rtype: ra, body: ba },
-				Expr::Fun { name: nb, params: pb, rtype: rb, body: bb }
-			) => {
-				eprintln!("{:>1$} {na} <-> {nb}", ' ', indent as usize);
-				assert_eq!(na, nb);
-				assert_eq!(pa, pb);
-				assert_eq!(ra, rb);
-				assert_nodes(*ba, sa, *bb, sb, indent + 2);
-			}
-			(Expr::Var { name: na, body: ba }, Expr::Var { name: nb, body: bb }) => {
-				assert_eq!(na, nb);
-				eprintln!("{:>1$} {na} <-> {nb}", ' ', indent as usize);
-				match (ba,bb) {
-					(Some(ba),Some(bb)) => assert_nodes(*ba, sa, *bb, sb, indent + 2),
-					(None,None) => {}
-					_ => assert_eq!(ba,bb),
-				}
-			}
-			(Expr::If { cond: ca, bt: ta, bf: fa }, Expr::If { cond: cb, bt: tb, bf: fb }) => {
-				assert_nodes(*ca, sa, *cb, sb, indent + 2);
-				assert_nodes(*ta, sa, *tb, sb, indent + 2);
-				match (fa,fb) {
-					(Some(fa),Some(fb)) => assert_nodes(*fa, sa, *fb, sb, indent + 2),
-					_ => assert_eq!(fa, fb),
-				}
-			}
-			(Expr::While { cond: ca, body: ba }, Expr::While { cond: cb, body: bb }) => {
-				assert_nodes(*ca, sa, *cb, sb, indent + 2);
-				assert_nodes(*ba, sa, *bb, sb, indent + 2);
-			}
-			(Expr::Unary { op: oa, rhs: ra }, Expr::Unary { op: ob, rhs: rb }) => {
-				assert_eq!(oa, ob);
-				assert_nodes(*ra, sa, *rb, sb, indent + 2);
-			}
-			(Expr::Binary { op: oa, lhs: la, rhs: ra }, Expr::Binary { op: ob, lhs: lb, rhs: rb }) => {
-				assert_eq!(oa, ob);
-				assert_nodes(*la, sa, *lb, sb, indent + 2);
-				assert_nodes(*ra, sa, *rb, sb, indent + 2);
-			}
-			(Expr::FnCall { name: na, args: aa }, Expr::FnCall { name: nb, args: ab }) => {
-				assert_eq!(na, nb);
-				assert_eq!(aa.len(), ab.len());
-				eprintln!("{:>1$} {aa:?} <-> {ab:?}", ' ', indent as usize);
-				for (a,b) in aa.iter().zip(ab.iter()) {
-					assert_nodes(*a, sa, *b, sb, indent + 2);
-				}
-			}
-			(a,b) => panic!("{a:?} != {b:?}\n\n{sa:?}\n\n{sb:?}"),
-		}
-		(a,b) => panic!("{a:?} != {b:?}\n\n{sa:?}\n\n{sb:?}"),
-	}
-}
-
-/*
 #[test]
 fn empty_input() -> miette::Result<()> {
-	let mut t = Tester::default();
-	t.0 = t.block(&[]);
-	parse_test("", &t)
+	parse_test("", block(&[]))
+}
+
+#[test]
+fn constant() -> miette::Result<()> {
+	parse_test("7", block(&[const_int(7)]))
+}
+
+#[test]
+fn unary_op_deref() -> miette::Result<()> {
+	parse_test("@a", block(&[
+		unop(UnaryOp::Deref, id("a")),
+	]))
+}
+
+#[test]
+fn unary_op_neg() -> miette::Result<()> {
+	parse_test("-a", block(&[
+		unop(UnaryOp::Neg, id("a")),
+	]))
+}
+
+#[test]
+fn unary_op_not() -> miette::Result<()> {
+	parse_test("!a", block(&[
+		unop(UnaryOp::Not, id("a")),
+	]))
+}
+
+#[test]
+fn unary_op_pos() -> miette::Result<()> {
+	parse_test("+a", block(&[
+		unop(UnaryOp::Pos, id("a")),
+	]))
+}
+
+#[test]
+fn unary_op_ref() -> miette::Result<()> {
+	parse_test("$a", block(&[
+		unop(UnaryOp::Ref, id("a")),
+	]))
+}
+
+#[test]
+fn precedence() -> miette::Result<()> {
+	parse_test("1 + 2 * 3", block(&[
+		binop(BinaryOp::Add,
+			const_int(1),
+			binop(BinaryOp::Mul,
+				const_int(2),
+				const_int(3),
+			),
+		),
+	]))
+}
+
+#[test]
+fn precedence2() -> miette::Result<()> {
+	parse_test("1 * 2 + 3", block(&[
+		binop(BinaryOp::Add,
+			binop(BinaryOp::Mul,
+				const_int(1),
+				const_int(2),
+			),
+			const_int(3),
+		),
+	]))
+}
+
+#[test]
+fn parentheses() -> miette::Result<()> {
+	parse_test("1 * (2 + 3)", block(&[
+		binop(BinaryOp::Mul,
+			const_int(1),
+			binop(BinaryOp::Add,
+				const_int(2),
+				const_int(3),
+			),
+		),
+	]))
 }
 
 #[test]
 fn var_stmt() -> miette::Result<()> {
-	let mut t = Tester::default();
-	t.0 = t.num(0, VT::Int(Int::Bot));
-	parse_test("var a = 0", &t.finish())
+	parse_test("var a = 0", block(&[
+		var("a", VT::Any, const_int(0)),
+	]))
 }
 
 #[test]
 fn var_stmt_expr() -> miette::Result<()> {
-	let mut t = Tester::default();
-	let a = t.num(3, VT::Int(Int::Bot));
-	let b = t.num(2, VT::Int(Int::Bot));
-	let c = t.num(1, VT::Int(Int::Bot));
-	let mul = t.binary(BinaryOp::Mul, a, b)?;
-	t.0 = t.binary(BinaryOp::Add, mul, c)?;
-	parse_test("var a = 3 * 2 + 1", &t.finish())
+	parse_test("var a = 3 * 2 + 1", block(&[
+		var("a", VT::Any, binop(BinaryOp::Add,
+			binop(BinaryOp::Mul,
+				const_int(3),
+				const_int(2),
+			),
+			const_int(1),
+		)),
+	]))
 }
 
 #[test]
 fn var_stmt_vtype() -> miette::Result<()> {
-	let mut t = Tester::default();
-	t.0 = t.num(0, VT::Int(Int::Bot));
-	parse_test("var a: u8 = 0", &t.finish())
+	parse_test("var a: u8 = 0", block(&[
+		var("a", VT::Int(Int::Bot), const_int(0)),
+	]))
 }
 
 #[test]
 fn var_stmt_udt_simple() -> miette::Result<()> {
-	let mut t = Tester::default();
-	let a = t.ident("b");
-	t.var("a", VT::Unit, a);
-	t.0 = t.block(&[]);
-	parse_test("var b = 0; var a = b;", &t)
+	parse_test("var b = 0; var a = b;", block(&[
+		var("b", VT::Any, const_int(0)),
+		var("a", VT::Any, const_int(0)),
+	]))
 }
 
+/*
 #[test]
 fn var_stmt_udt_fncall_empty() -> miette::Result<()> {
 	let mut t = Tester::default();

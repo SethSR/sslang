@@ -2,13 +2,12 @@
 use std::rc::Rc;
 
 use miette::IntoDiagnostic;
+use slotmap::Key;
 use tracing::{info,debug};
 
-mod checker;
 mod tokens;
 mod lexer;
 mod parser;
-mod reducer;
 
 const TEST_INPUT: &str = "
 rec vec {
@@ -53,14 +52,10 @@ main()";
 
 use clap::Parser;
 
-use parser::{Error, Step};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
 	Lexer,
 	Parser,
-	Checker,
-	Reducer,
 }
 
 impl From<String> for Stage {
@@ -68,8 +63,6 @@ impl From<String> for Stage {
 		match s.to_lowercase().as_str() {
 			"lexer" => Self::Lexer,
 			"parser" => Self::Parser,
-			"checker" => Self::Checker,
-			"reducer" => Self::Reducer,
 			_ => unimplemented!(),
 		}
 	}
@@ -110,14 +103,12 @@ fn main() -> miette::Result<()> {
 		.without_time()
 		.init();
 
-	/*
 	let in_file_name = options.source_file;
 
 	let out_file_name = options.output_file;
 
 	let source = std::fs::read_to_string(&in_file_name.trim())
 		.into_diagnostic()?;
-	*/
 
 	let mut input = String::new();
 	if options.repl {
@@ -136,14 +127,14 @@ fn main() -> miette::Result<()> {
 		}
 	}
 
-	let source = TEST_INPUT;
+	// let source = TEST_INPUT;
 
-	if let Err(e) = AppData::new(source).start() {
+	if let Err(e) = AppData::new(&source).start() {
 		panic!("ERR: {e}");
 	}
 
 	info!("lexing");
-	let tokens = lexer::eval(source)?;
+	let tokens = lexer::eval(&source)?;
 	if options.debug.contains(&Stage::Lexer) {
 		let token_str = tokens.iter()
 			.map(|t| t.to_string())
@@ -153,40 +144,26 @@ fn main() -> miette::Result<()> {
 	}
 
 	info!("parsing");
-	let mut stepper = parser::Parser::new(source, &tokens);
+	let mut stepper = parser::Parser::new(&source, &tokens);
 	while stepper.step_and_continue(true) {}
 	let out = stepper.finish()?;
 	if options.debug.contains(&Stage::Parser) {
-		debug!("Start ID: {}", out.start);
-		for (nx, node) in out.store.iter() {
-			debug!("[{nx:>3}]: {node}");
-		}
-	}
-
-	info!("type-checking");
-	let mut out = checker::eval(out);
-	if options.debug.contains(&Stage::Checker) {
-		debug!("checked AST: {out:?}");
-	}
-
-	if options.release {
-		info!("reduction");
-		let ast = reducer::eval(&mut out.store, out.start);
-		if options.debug.contains(&Stage::Reducer) {
-			debug!("reduced AST: {ast:?}");
+		debug!("Start ID: {:?}", out.start);
+		for node in out.store.iter() {
+			debug!("{node:?}");
 		}
 	}
 
 	let output = format!("AST: {out:?}");
 
-	std::fs::write("test.out", output)
-//	std::fs::write(&out_file_name, output)
+	// std::fs::write("test.out", output)
+	std::fs::write(&out_file_name, output)
 		.into_diagnostic()
 }
 
 use ratatui::{
-	prelude::{CrosstermBackend, Terminal, Constraint, Direction, Layout, Line, Span, Style, Color, Modifier},
-	widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+	prelude::{CrosstermBackend, Terminal, Constraint, Direction, Layout, Style, Color, Modifier},
+	widgets::{Block, Borders, List, ListItem, Paragraph},
 };
 use crossterm::{
 	event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -277,7 +254,7 @@ impl AppData {
 								tokens
 									.iter()
 									.rev()
-									.map(|t| ListItem::new(format!("{t}")))
+									.map(|t| ListItem::new(t.to_string()))
 									.collect::<Vec<_>>(),
 							)
 							.block(Block::default().title("Tokens").borders(Borders::ALL));
@@ -301,32 +278,21 @@ impl AppData {
 								])
 								.split(chunks[0]);
 
-							let (head, _) = parser.input.split_at(parser.index);
-							let start = head.last()
-								.map(|t| t.range().start)
-								.unwrap_or(0);
-							let source = Paragraph::new(Line::from(vec![
-									Span::styled(&parser.source[..start], Style::new().add_modifier(Modifier::BOLD)),
-									Span::raw(&parser.source[start..]),
-							]))
-								.wrap(Wrap { trim: true })
-								.scroll((1, 1))
-								.block(Block::default().title("Source").borders(Borders::ALL));
+							let tokens = &parser.input[parser.index..];
+							let source = List::new(tokens.iter().map(|t| ListItem::new(t.to_string())).collect::<Vec<_>>())
+								.block(Block::default().title("Tokens").borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM));
 							f.render_widget(source, top[0]);
 
 							let node_data = parser.nodes.iter()
-								.map(|(nx,n)| {
-									(nx, &n.expr)
-								})
-								.fold(String::new(), |out,(nx,expr)| {
-									format!("{out}\n[{nx:>3}] {expr}")
+								.fold(String::new(), |out,n| {
+									format!("{out}\n{n:?}")
 								});
 							let nodes = Paragraph::new(node_data)
-								.block(Block::default().title("Nodes").borders(Borders::ALL));
+								.block(Block::default().title("Nodes").borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM));
 							f.render_widget(nodes, top[1]);
 
 							let scopes = Paragraph::new(format!("{:#?}", parser.scopes))
-								.block(Block::default().title("Scopes").borders(Borders::ALL));
+								.block(Block::default().title("Scopes").borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM));
 							f.render_widget(scopes, top[2]);
 
 							let value_data = parser.values.iter()
@@ -334,7 +300,7 @@ impl AppData {
 								.map(|value| format!("{value:?}"))
 								.collect::<Vec<_>>();
 							let values = Paragraph::new(value_data.join("\n"))
-								.block(Block::default().title("Values").borders(Borders::ALL));
+								.block(Block::default().title("Values").borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM));
 							f.render_widget(values, top[3]);
 
 							let stack_data = parser.stack.iter()
@@ -344,13 +310,11 @@ impl AppData {
 							let stack = Paragraph::new(stack_data.join("\n"))
 								.block(Block::default().title("Stack").borders(Borders::ALL));
 							f.render_widget(stack, top[4]);
-
-							// stepper.program;
 						}
 
 						AppState::Done(start_nx, nodes) => {
 							let mut out = vec![];
-							parser::nodes_to_string(*start_nx, nodes, 0, &mut out);
+							nodes.nodes_to_string(*start_nx, 0, &mut out);
 							let output = List::new(out)
 								.block(Block::default().title("Output").borders(Borders::ALL));
 							f.render_widget(output, chunks[0]);
@@ -399,7 +363,7 @@ impl AppData {
 											Ok(out) => AppState::Done(out.start, out.store),
 											Err(e) => {
 												self.status = format!("[exit] {e}");
-												AppState::Done(0, parser::NodeStore::default())
+												AppState::Done(parser::NodeId::null(), parser::NodeStore::default())
 											}
 										}
 									} else {
@@ -425,7 +389,7 @@ impl AppData {
 										}
 										Some(Err(e)) => {
 											self.status = format!("[exit] {e}");
-											self.state = AppState::Done(0, parser::NodeStore::default());
+											self.state = AppState::Done(parser::NodeId::null(), parser::NodeStore::default());
 										}
 										None => {
 											let parser = parser::Parser::new(&self.source, &self.tokens);
@@ -451,7 +415,7 @@ impl AppData {
 											Ok(out) => AppState::Done(out.start, out.store),
 											Err(e) => {
 												self.status = format!("[exit] {e}");
-												AppState::Done(0, parser::NodeStore::default())
+												AppState::Done(parser::NodeId::null(), parser::NodeStore::default())
 											}
 										};
 									} else {

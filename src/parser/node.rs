@@ -2,79 +2,179 @@
 use std::fmt;
 use std::rc::Rc;
 
+use slotmap::{SecondaryMap, SlotMap, new_key_type};
+
 use super::{BinaryOp, Meet, TokenInfo, UnaryOp, ValueType};
 use super::parser::Scope;
 
-pub(crate) type NodeId = usize;
+new_key_type! { pub(crate) struct NodeId; }
 
+pub(crate) struct NodeRef<'a> {
+	id: NodeId,
+	pub(crate) store: &'a NodeStore,
+}
+
+impl NodeRef<'_> {
+	pub(crate) fn expr(&self) -> &Expr {
+		&self.store.data[self.id].expr
+	}
+
+	pub(crate) fn kind(&self) -> &ValueType {
+		&self.store.data[self.id].kind
+	}
+
+	pub(crate) fn info(&self) -> &TokenInfo {
+		&self.store.data[self.id].info
+	}
+
+	pub(crate) fn number(&self) -> i64 {
+		self.store.numbers[self.id]
+	}
+
+	pub(crate) fn name(&self) -> Rc<str> {
+		self.store.names[self.id].clone()
+	}
+
+	pub(crate) fn boolean(&self) -> bool {
+		self.store.bools[self.id]
+	}
+
+	pub(crate) fn inputs(&self) -> &[NodeId] {
+		self.store.inputs.get(self.id)
+			.map(|s| s.as_slice())
+			.unwrap_or(&[])
+	}
+
+	pub(crate) fn scope(&self) -> &Scope {
+		&self.store.scopes[self.id]
+	}
+
+	pub(crate) fn params(&self) -> &[(Rc<str>, ValueType)] {
+		self.store.paramlists[self.id].as_slice()
+	}
+
+	pub(crate) fn args(&self) -> &[(Rc<str>, NodeId)] {
+		self.store.arglists[self.id].as_slice()
+	}
+
+	pub(crate) fn vtype(&self) -> &ValueType {
+		&self.store.types[self.id]
+	}
+
+	pub(crate) fn unary_op(&self) -> UnaryOp {
+		self.store.unary_ops[self.id]
+	}
+
+	pub(crate) fn binary_op(&self) -> BinaryOp {
+		self.store.binary_ops[self.id]
+	}
+}
+
+/// Expr::Number   -> value: i64
+/// Expr::Id       -> name: Rc<str>
+/// Expr::Bool     -> value: bool
+/// Expr::Block    -> body: Option<NodeId>, scope: Scope
+/// Expr::Rec      -> name: Rc<str>, fields: Vec<(Rc<str>, ValueType)>
+/// Expr::Fun      -> name: Rc<str>, params: Vec<(Rc<str>, ValueType)>, rtype: ValueType
+/// Expr::Var      -> name: Rc<str>, body: Option<NodeId>
+/// Expr::If       -> cond: NodeId, bt: NodeId, bf: Option<NodeId>
+/// Expr::While    -> cond: NodeId, body: NodeId
+/// Expr::RecInit  -> name: Rc<str>, field_inits: Vec<(Rc<str>, NodeId)>
+/// Expr::UnaryOp  -> op: UnaryOp, rhs: NodeId
+/// Expr::BinaryOp -> op: BinaryOp, lhs: NodeId, rhs: NodeId
+/// Expr::FnCall   -> name: Rc<str>, args: Vec<NodeId>
+/// Expr::Phi      -> lhs: NodeId, rhs: NodeId
 #[derive(Debug, Default)]
 pub(crate) struct NodeStore {
-	data: Vec<Option<Node>>,
-	free: Vec<NodeId>,
+	data: SlotMap<NodeId, Node>,
+
+	pub(crate) numbers   : SecondaryMap<NodeId, i64>,
+	pub(crate) names     : SecondaryMap<NodeId, Rc<str>>,
+	pub(crate) bools     : SecondaryMap<NodeId, bool>,
+	pub(crate) inputs    : SecondaryMap<NodeId, Vec<NodeId>>,
+	pub(crate) scopes    : SecondaryMap<NodeId, Scope>,
+	pub(crate) paramlists: SecondaryMap<NodeId, Vec<(Rc<str>, ValueType)>>,
+	pub(crate) arglists  : SecondaryMap<NodeId, Vec<(Rc<str>, NodeId)>>,
+	pub(crate) types     : SecondaryMap<NodeId, ValueType>,
+	pub(crate) unary_ops : SecondaryMap<NodeId, UnaryOp>,
+	pub(crate) binary_ops: SecondaryMap<NodeId, BinaryOp>,
 }
 
 impl NodeStore {
-	pub fn iter(&self) -> impl Iterator<Item=(usize,&Node)> {
-		self.data.iter()
-			.enumerate()
-			.filter_map(|(i,n)| n.as_ref().zip(Some(i)))
-			.map(|(n,i)| (i,n))
+	pub fn iter<'a>(&'a self) -> impl Iterator<Item=NodeRef<'a>> {
+		self.data.iter().map(|(id,_)| NodeRef { id, store: self })
 	}
 }
 
 impl NodeStore {
 	pub(crate) fn new_block(&mut self, body: Option<NodeId>, scope: Scope, info: TokenInfo) -> NodeId {
 		let kind = body.and_then(|bx| self.data.get(bx))
-			.and_then(|n| n.as_ref())
 			.map(|n| n.kind.clone())
 			.unwrap_or(ValueType::Unit);
-		self.add(Node::new(Expr::Block { body, scope }, kind, info))
+		let nx = self.data.insert(Node::new(Expr::Block, kind, info));
+		if let Some(bx) = body {
+			self.inputs.insert(nx, vec![bx]);
+		}
+		self.scopes.insert(nx, scope);
+		nx
 	}
 
 	pub(crate) fn new_bool(&mut self, b: bool, info: TokenInfo) -> NodeId {
-		self.add(Node::new(Expr::Bool(b), ValueType::Bool, info))
+		let nx = self.data.insert(Node::new(Expr::Bool, ValueType::Bool, info));
+		self.bools.insert(nx, b);
+		nx
 	}
 
 	pub(crate) fn new_id(
 		&mut self,
-		s: &Rc<str>,
-		kind: ValueType,
+		id: Rc<str>,
 		info: TokenInfo,
 	) -> NodeId {
-		self.add(Node::new(Expr::Id(s.clone()), kind, info))
+		let nx = self.data.insert(Node::new(Expr::Id, ValueType::Any, info));
+		self.names.insert(nx, id);
+		nx
 	}
 
 	pub(crate) fn new_num(
 		&mut self,
-		n: i64,
+		num: i64,
 		kind: ValueType,
 		info: TokenInfo,
 	) -> NodeId {
-		self.add(Node::new(Expr::Num(n), kind, info))
+		let nx = self.data.insert(Node::new(Expr::Num, kind, info));
+		self.numbers.insert(nx, num);
+		nx
 	}
 
 	pub(crate) fn new_rec(
 		&mut self,
 		name: &Rc<str>,
-		fields: Vec<NodeId>,
+		fields: Vec<(Rc<str>, ValueType)>,
 		info: TokenInfo,
 	) -> NodeId {
 		let udt = Rc::clone(name);
 		let name = Rc::clone(name);
-		self.add(Node::new(Expr::Rec { name, fields }, ValueType::Udt(udt), info))
+		let nx = self.data.insert(Node::new(Expr::Rec, ValueType::Udt(udt), info));
+		self.names.insert(nx, name);
+		self.paramlists.insert(nx, fields);
+		nx
 	}
 
 	pub(crate) fn new_fun(
 		&mut self,
 		name: &Rc<str>,
-		params: Vec<NodeId>,
+		params: Vec<(Rc<str>, ValueType)>,
 		rtype: ValueType,
 		body: NodeId,
 		info: TokenInfo,
 	) -> NodeId {
-		let name = Rc::clone(name);
 		let kind = rtype.clone();
-		self.add(Node::new(Expr::Fun { name, params, rtype, body }, kind, info))
+		let nx = self.data.insert(Node::new(Expr::Fun, kind, info));
+		self.names.insert(nx, Rc::clone(name));
+		self.paramlists.insert(nx, params);
+		self.types.insert(nx, rtype);
+		self.inputs.insert(nx, vec![body]);
+		nx
 	}
 
 	pub(crate) fn new_var(
@@ -85,7 +185,12 @@ impl NodeStore {
 		info: TokenInfo,
 	) -> NodeId {
 		let name = Rc::clone(name);
-		self.add(Node::new(Expr::Var { name, body }, vtype, info))
+		let nx = self.data.insert(Node::new(Expr::Var, vtype, info));
+		self.names.insert(nx, name);
+		if let Some(bx) = body {
+			self.inputs.insert(nx, vec![bx]);
+		}
+		nx
 	}
 
 	pub(crate) fn new_if(
@@ -95,15 +200,18 @@ impl NodeStore {
 		bf: Option<NodeId>,
 		info: TokenInfo,
 	) -> NodeId {
-		let tkind = self.get(bt).ok()
-			.map(|n| &n.kind);
-		let fkind = bf.and_then(|nx| self.get(nx).ok())
-			.map(|n| &n.kind);
-		let kind = match (tkind, fkind) {
-			(Some(true_node), Some(false_node)) => true_node.meet(false_node),
-			_ => ValueType::Unit,
-		};
-		self.add(Node::new(Expr::If { cond, bt, bf }, kind, info))
+		let tkind = self.get(bt).kind().clone();
+		let kind = bf.map(|nx| {
+			tkind.meet(self.get(nx).kind())
+		}).unwrap_or(ValueType::Unit);
+
+		let nx = self.data.insert(Node::new(Expr::If, kind, info));
+		let mut inputs = vec![cond, bt];
+		if let Some(bx) = bf {
+			inputs.push(bx);
+		}
+		self.inputs.insert(nx, inputs);
+		nx
 	}
 
 	pub(crate) fn new_while(
@@ -112,7 +220,9 @@ impl NodeStore {
 		body: NodeId,
 		info: TokenInfo,
 	) -> NodeId {
-		self.add(Node::new(Expr::While { cond, body }, ValueType::Unit, info))
+		let nx = self.data.insert(Node::new(Expr::While, ValueType::Unit, info));
+		self.inputs.insert(nx, vec![cond, body]);
+		nx
 	}
 
 	pub(crate) fn new_rec_init(
@@ -121,9 +231,10 @@ impl NodeStore {
 		field_inits: Vec<(Rc<str>, NodeId)>,
 		info: TokenInfo,
 	) -> NodeId {
-		let udt = Rc::clone(name);
-		let name = Rc::clone(name);
-		self.add(Node::new(Expr::RecInit { name, field_inits }, ValueType::Udt(udt), info))
+		let nx = self.data.insert(Node::new(Expr::RecInit, ValueType::Udt(Rc::clone(name)), info));
+		self.names.insert(nx, Rc::clone(name));
+		self.arglists.insert(nx, field_inits);
+		nx
 	}
 
 	pub(crate) fn new_unary(
@@ -132,8 +243,11 @@ impl NodeStore {
 		rhs: NodeId,
 		info: TokenInfo,
 	) -> miette::Result<NodeId> {
-		let kind = self.get(rhs)?.kind.clone();
-		Ok(self.add(Node::new(Expr::Unary { op, rhs }, kind, info)))
+		let kind = self.get(rhs).kind().clone();
+		let nx = self.data.insert(Node::new(Expr::Unary, kind, info));
+		self.unary_ops.insert(nx, op);
+		self.inputs.insert(nx, vec![rhs]);
+		Ok(nx)
 	}
 
 	pub(crate) fn new_binary(
@@ -143,10 +257,13 @@ impl NodeStore {
 		rhs: NodeId,
 		info: TokenInfo,
 	) -> miette::Result<NodeId> {
-		let lhs_kind = &self.get(lhs)?.kind;
-		let rhs_kind = &self.get(rhs)?.kind;
-		let kind = lhs_kind.meet(rhs_kind);
-		Ok(self.add(Node::new(Expr::Binary { op, lhs, rhs }, kind, info)))
+		let lhs_kind = self.get(lhs).kind().clone();
+		let rhs_kind = self.get(rhs).kind().clone();
+		let kind = lhs_kind.meet(&rhs_kind);
+		let nx = self.data.insert(Node::new(Expr::Binary, kind, info));
+		self.binary_ops.insert(nx, op);
+		self.inputs.insert(nx, vec![lhs, rhs]);
+		Ok(nx)
 	}
 
 	pub(crate) fn new_call(
@@ -156,7 +273,10 @@ impl NodeStore {
 		info: TokenInfo,
 	) -> NodeId {
 		let name = Rc::clone(name);
-		self.add(Node::new(Expr::FnCall { name, args }, ValueType::Any, info))
+		let nx = self.data.insert(Node::new(Expr::FnCall, ValueType::Any, info));
+		self.names.insert(nx, name);
+		self.inputs.insert(nx, args);
+		nx
 	}
 
 	pub(crate) fn new_phi(
@@ -164,38 +284,88 @@ impl NodeStore {
 		lhs: NodeId,
 		rhs: NodeId,
 	) -> miette::Result<NodeId> {
-		let lnode = &self.get(lhs)?;
-		let rnode = &self.get(rhs)?;
-		let kind = lnode.kind.meet(&rnode.kind);
-		let start = lnode.info.start.min(rnode.info.start);
-		let end = lnode.info.end.max(rnode.info.end);
-		Ok(self.add(Node::new(Expr::Phi { lhs, rhs }, kind, start..end)))
+		let lnode = self.get(lhs);
+		let rnode = self.get(rhs);
+		let kind = lnode.kind().meet(&rnode.kind());
+		let start = lnode.info().start.min(rnode.info().start);
+		let end = lnode.info().end.max(rnode.info().end);
+		let nx = self.data.insert(Node::new(Expr::Phi, kind, start..end));
+		self.inputs.insert(nx, vec![lhs, rhs]);
+		Ok(nx)
 	}
 
-	pub(crate) fn get(&self, nx: usize) -> miette::Result<&Node> {
-		self.data.get(nx)
-			.and_then(|n| n.as_ref())
-			.ok_or_else(|| miette::miette! {
-				"Compiler Error: missing node @ index '{nx}'"
-			})
-	}
-
-	pub(crate) fn get_mut(&mut self, nx: NodeId) -> miette::Result<&mut Node> {
-		self.data.get_mut(nx)
-			.and_then(|n| n.as_mut())
-			.ok_or_else(|| miette::miette!("Compiler Error: expression information not found in parser"))
-	}
-}
-
-impl NodeStore {
-	pub(crate) fn add(&mut self, node: Node) -> NodeId {
-		if let Some(idx) = self.free.pop() {
-			self.data[idx] = Some(node);
-			idx
-		} else {
-			self.data.push(Some(node));
-			self.data.len() - 1
+	pub(crate) fn nodes_to_string(&self, nx: NodeId, mut padding: usize, out: &mut Vec<String>) {
+		let node = self.data.get(nx);
+		let space = "  ".repeat(padding);
+		match node {
+			Some(node) => {
+				out.push(format!("[{nx:3?}] {space}> {node:?}"));
+				padding += 1;
+				match &node.expr {
+					Expr::Block => if let Some(body) = self.inputs.get(nx) {
+						self.nodes_to_string(body[0], padding, out);
+					}
+					Expr::Fun => if let Some(body) = self.inputs.get(nx) {
+						self.nodes_to_string(body[0], padding, out);
+					}
+					Expr::Var => if let Some(body) = self.inputs.get(nx) {
+						self.nodes_to_string(body[0], padding, out);
+					}
+					Expr::If => match &self.inputs[nx][..] {
+						[cond, bt, bf] => {
+							self.nodes_to_string(*cond, padding, out);
+							self.nodes_to_string(*bt, padding, out);
+							self.nodes_to_string(*bf, padding, out);
+						}
+						[cond, bt] => {
+							self.nodes_to_string(*cond, padding, out);
+							self.nodes_to_string(*bt, padding, out);
+						}
+						ns => {
+							out.push(format!("[{nx:3?}] {space}E > IF {ns:?}"));
+						}
+					}
+					Expr::While => match &self.inputs[nx][..] {
+						[cond, body] => {
+							self.nodes_to_string(*cond, padding, out);
+							self.nodes_to_string(*body, padding, out);
+						}
+						[cond] => {
+							self.nodes_to_string(*cond, padding, out);
+						}
+						ns => {
+							out.push(format!("[{nx:3?}] {space}E > WHILE {ns:?}"));
+						}
+					}
+					Expr::FnCall => for (_,item) in &self.arglists[nx] {
+						self.nodes_to_string(*item, padding, out);
+					}
+					Expr::Unary => for item in &self.inputs[nx] {
+						self.nodes_to_string(*item, padding, out);
+					}
+					Expr::Binary => for item in &self.inputs[nx] {
+						self.nodes_to_string(*item, padding, out);
+					}
+					Expr::RecInit => for (name, vtype) in &self.paramlists[nx] {
+						out.push(format!("[{nx:?}] {space}  > ({name}, {vtype})"));
+					}
+					Expr::Phi => for item in &self.inputs[nx] {
+						self.nodes_to_string(*item, padding, out);
+					}
+					Expr::Num => {}
+					Expr::Id => {}
+					Expr::Bool => {}
+					Expr::Rec => {}
+				}
+			}
+			None => {
+				out.push(format!("[{nx:?}] {space}> ERROR: no node found for index"));
+			}
 		}
+	}
+
+	pub(crate) fn get(&self, id: NodeId) -> NodeRef {
+		NodeRef { id, store: self }
 	}
 }
 
@@ -218,142 +388,110 @@ impl Node {
 	}
 }
 
-impl fmt::Display for Node {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		write!(f, "{}", self.expr)
-	}
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Expr {
-	Num(i64),
-	Id(Rc<str>),
-	Bool(bool),
-	Block {
-		body: Option<NodeId>,
-		scope: Scope,
-	},
-	Rec {
-		name: Rc<str>,
-		fields: Vec<NodeId>,
-	},
-	Fun {
-		name: Rc<str>,
-		params: Vec<NodeId>,
-		rtype: ValueType,
-		body: NodeId,
-	},
-	Var {
-		name: Rc<str>,
-		body: Option<NodeId>,
-	},
-	If {
-		cond: NodeId,
-		bt: NodeId,
-		bf: Option<NodeId>,
-	},
-	While {
-		cond: NodeId,
-		body: NodeId,
-	},
-	RecInit {
-		name: Rc<str>,
-		field_inits: Vec<(Rc<str>, NodeId)>,
-	},
-	Unary {
-		op: UnaryOp,
-		rhs: NodeId,
-	},
-	Binary {
-		op: BinaryOp,
-		lhs: NodeId,
-		rhs: NodeId,
-	},
-	FnCall {
-		name: Rc<str>,
-		args: Vec<NodeId>,
-	},
-	Phi {
-		lhs: NodeId,
-		rhs: NodeId,
-	},
+	Num,
+	Id,
+	Bool,
+	Block,
+	Rec,
+	Fun,
+	Var,
+	If,
+	While,
+	RecInit,
+	Unary,
+	Binary,
+	FnCall,
+	Phi,
 }
 
-impl Expr {
-	pub fn is_const(&self, store: &NodeStore) -> bool {
-		match self {
-			Self::Num(_) => true,
-			Self::Bool(_) => true,
-			Self::Phi{lhs,rhs} => {
-				let Ok(lnode) = store.get(*lhs) else { return false };
-				if lnode.expr.is_const(store) {
-					store.get(*rhs).map(|rn| rn.expr.is_const(store))
-						.unwrap_or_default()
-				} else {
-					false
-				}
+impl NodeRef<'_> {
+	pub fn is_const(&self) -> bool {
+		match self.expr() {
+			Expr::Num => true,
+			Expr::Bool => true,
+			Expr::Phi => {
+				let inputs = self.inputs();
+				let lhs = self.store.get(inputs[0]);
+				let rhs = self.store.get(inputs[1]);
+				lhs.is_const() && rhs.is_const()
 			}
-			Self::Id(_) => false,
-			Self::Block{body,..} => {
-				if let Some(nx) = body {
-					store.get(*nx).map(|n| n.expr.is_const(store))
-						.unwrap_or_default()
-				} else {
-					false
-				}
+			Expr::Id => false,
+			Expr::Block => {
+				let inputs = self.inputs();
+				self.store.get(inputs[0]).is_const()
 			}
-			Self::Rec{..} => true,
-			Self::Fun{..} => true,
-			Self::Var{..} => false,
+			Expr::Rec => true,
+			Expr::Fun => true,
+			Expr::Var => false,
 			// TODO - srenshaw - We could check whether the conditional and/or the branches are constant
 			// and propagate the result here, but it may be better to leave that for an optimization pass
 			// somewhere else.
-			Self::If{..} => false,
-			Self::While{..} => false,
-			Self::RecInit{..} => false,
-			Self::Unary{rhs,..} => {
-				store.get(*rhs).map(|rn| rn.expr.is_const(store))
-					.unwrap_or_default()
+			Expr::If => false,
+			Expr::While => false,
+			Expr::RecInit => false,
+			Expr::Unary => {
+				let inputs = self.inputs();
+				self.store.get(inputs[0]).is_const()
 			}
-			Self::Binary{lhs,rhs,..} => {
-				let Ok(lnode) = store.get(*lhs) else { return false };
-				if lnode.expr.is_const(store) {
-					store.get(*rhs).map(|rn| rn.expr.is_const(store))
-						.unwrap_or_default()
-				} else {
-					false
-				}
+			Expr::Binary => {
+				let inputs = self.inputs();
+				let lhs = self.store.get(inputs[0]);
+				let rhs = self.store.get(inputs[1]);
+				lhs.is_const() && rhs.is_const()
 			}
-			Self::FnCall{..} => false,
+			Expr::FnCall => false,
 		}
 	}
 }
 
-impl fmt::Display for Expr {
+impl PartialEq for NodeRef<'_> {
+	fn eq(&self, _rhs: &NodeRef<'_>) -> bool {
+		todo!()
+	}
+}
+
+impl fmt::Debug for NodeRef<'_> {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-		match self {
-			Expr::While { cond, body }              => write!(fmt, "(while {cond} {body:?})"),
-			Expr::Bool(b)                           => write!(fmt, "{b}"),
-			Expr::Phi { lhs, rhs }                  => write!(fmt, "(phi {lhs} {rhs})"),
-			Expr::Num(n)                            => write!(fmt, "{n}"),
-			Expr::Id(s)                             => write!(fmt, "{s}"),
-			Expr::Block{ body: None, scope }        => write!(fmt, "[] ({})", scope.keys()
-				.map(|name| name.to_string())
-				.reduce(|out, name| format!("{out},{name}"))
-				.unwrap_or_default()),
-			Expr::Block{ body: Some(bx), scope }    => write!(fmt, "[{bx}] ({})", scope.keys()
-				.map(|name| name.to_string())
-				.reduce(|out, name| format!("{out},{name}"))
-				.unwrap_or_default()),
-			Expr::RecInit { name, field_inits }     => write!(fmt, "(init {name} {field_inits:?})"),
-			Expr::Unary { op, rhs }                 => write!(fmt, "({op} {rhs})"),
-			Expr::Binary { op, lhs, rhs }           => write!(fmt, "({op} {lhs} {rhs})"),
-			Expr::Var { name, body: Some(body) }    => write!(fmt, "(var {name} = {body})"),
-			Expr::Var { name, body: None }          => write!(fmt, "(var {name})"),
-			Expr::If { cond, bt, bf }               => write!(fmt, "(if {cond} {bt:?} {bf:?})"),
-			Expr::FnCall { name, args }             => write!(fmt, "(call {name} {args:?})"),
-			Expr::Rec { name, fields }              => write!(fmt, "(rec {name} {fields:?})"),
-			Expr::Fun { name, params, rtype, body } => write!(fmt, "(fn {name} {params:?} -> {rtype} {body:?})"),
+		write!(fmt, "{self}")
+	}
+}
+
+impl fmt::Display for NodeRef<'_> {
+	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+		match self.expr() {
+			Expr::Block => {
+				let scope = self.store.scopes[self.id].keys()
+					.map(|name| name.to_string())
+					.reduce(|out, name| format!("{out},{name}"))
+					.unwrap_or_default();
+				match self.store.inputs.get(self.id) {
+					Some(inputs) => write!(fmt, "{inputs:?} ({scope})"),
+					None         => write!(fmt, "[] ({scope})"),
+				}
+			}
+			Expr::Var => {
+				let inputs = self.inputs();
+				if inputs.is_empty() {
+					write!(fmt, "(var {})", self.name())
+				} else {
+					write!(fmt, "(var {} = {:?})", self.name(), inputs)
+				}
+			}
+			Expr::Id      => write!(fmt, "{}", self.name()),
+			Expr::Num     => write!(fmt, "{}", self.number()),
+			Expr::Bool    => write!(fmt, "{}", self.boolean()),
+			Expr::Unary   => write!(fmt, "({} {:?})", self.unary_op(), self.inputs()),
+			Expr::Binary  => write!(fmt, "({} {:?})", self.binary_op(), self.inputs()),
+			Expr::If      => write!(fmt, "(if {:?})", self.inputs()),
+			Expr::Phi     => write!(fmt, "(phi {:?})", self.inputs()),
+			Expr::Rec     => write!(fmt, "(rec {} {:?})", self.name(), self.params()),
+			Expr::RecInit => write!(fmt, "(init {} {:?})", self.name(), self.args()),
+			Expr::While   => write!(fmt, "(while {:?})", self.inputs()),
+			Expr::FnCall  => write!(fmt, "(call {} {:?})", self.name(), self.args()),
+			Expr::Fun     => write!(fmt, "(fn {} {:?} -> {} {:?})",
+				self.name(), self.params(), self.vtype(), self.inputs()),
 		}
 	}
 }

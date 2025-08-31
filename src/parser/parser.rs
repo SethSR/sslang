@@ -1,5 +1,5 @@
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use miette::{LabeledSpan, IntoDiagnostic, WrapErr};
@@ -31,44 +31,46 @@ fn expected(parser: &Parser, msg: &str) -> Error {
 	}.with_source_code(parser.source.to_string()))
 }
 
-pub(crate) type Scope = HashMap<Rc<str>, NodeId>;
+pub(crate) type Scope = HashMap<Rc<str>, (ValueType, NodeId)>;
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct ScopeTracker(Vec<Scope>);
 
-struct FunDef {
-	params: Vec<(Rc<str>, ValueType)>,
-	rtype: ValueType,
-}
+// struct FunDef {
+// 	params: Vec<(Rc<str>, ValueType)>,
+// 	rtype: ValueType,
+// }
 
-type FunDefStorage = HashMap<Rc<str>, FunDef>;
+// type FunDefStorage = HashMap<Rc<str>, FunDef>;
 
-struct RecDef {
-	fields: Vec<(Rc<str>, ValueType)>,
-}
+// #[derive(Debug)]
+// struct RecDef {
+// 	fields: Vec<(Rc<str>, ValueType)>,
+// }
 
-type RecDefStorage = HashMap<Rc<str>, RecDef>;
+// type RecDefStorage = HashMap<Rc<str>, RecDef>;
 
 #[derive(Debug)]
 pub(crate) enum StackOp {
 	Param(TokenType),
 	Block(TokenType, usize),
+	Ident(Rc<str>),
 	Expr(u8),
 	ExprEnd(u8),
 	BinaryOp(BinaryOp),
 	UnaryOp(UnaryOp),
 
-	RecDef,
-	RecDefEnd,
-	RecInit,
-	RecInitParams(usize),
-	RecInitEnd(usize),
-	Fun,
-	FunRet,
-	FunEnd,
-	Call,
-	CallArg,
-	CallEnd,
+	// RecDef,
+	// RecDefEnd,
+	// RecInit,
+	// RecInitParams(usize),
+	// RecInitEnd(usize),
+	// Fun,
+	// FunRet,
+	// FunEnd,
+	// Call,
+	// CallArg,
+	// CallEnd,
 	Var,
 	VarEnd,
 	While,
@@ -85,6 +87,7 @@ pub(crate) enum StackValue {
 	NodeId(NodeId),
 	Ident(Rc<str>),
 	InfoStart(u16),
+	Info(u16,u16),
 	Type(ValueType),
 	Scope(ScopeTracker),
 }
@@ -99,8 +102,8 @@ pub(crate) struct Parser {
 
 	// TODO - srenshaw - All of these fields will probably be moved into a Scope structure.
 	pub(crate) nodes: NodeStore,
-	pub(crate) records: HashSet<Rc<str>>, //RecDefStorage,
-	pub(crate) functions: HashSet<Rc<str>>, //FunDefStorage,
+	// pub(crate) fun_defs: HashSet<Rc<str>>, //FunDefStorage,
+	// pub(crate) rec_defs: RecDefStorage,
 
 	// Stack
 	pub(crate) stack: Vec<StackOp>,
@@ -123,8 +126,8 @@ impl Parser {
 			scopes,
 
 			nodes: NodeStore::default(),
-			records: HashSet::default(),
-			functions: HashSet::default(),
+			// rec_defs: RecDefStorage::default(),
+			// fun_defs: HashSet::default(),
 
 			stack: vec![StackOp::Block(TokenType::Eof, 0)],
 			values: vec![],
@@ -202,23 +205,25 @@ impl Parser {
 
 			Some(StackOp::Block(closing_token, count)) => self.block(closing_token, count),
 
+			Some(StackOp::Ident(s)) => self.ident(s),
+
 			Some(StackOp::Expr(min_bp)) => self.expr_start(min_bp),
 			Some(StackOp::ExprEnd(min_bp)) => self.expr_end(min_bp),
 
-			Some(StackOp::RecDef) => self.rec_start(),
-			Some(StackOp::RecDefEnd) => self.rec_end(),
+			// Some(StackOp::RecDef) => self.rec_start(),
+			// Some(StackOp::RecDefEnd) => self.rec_end(),
 
-			Some(StackOp::RecInit) => self.rec_init_start(),
-			Some(StackOp::RecInitParams(count)) => self.rec_init_params(count),
-			Some(StackOp::RecInitEnd(count)) => self.rec_init_end(count),
+			// Some(StackOp::RecInit) => self.rec_init_start(),
+			// Some(StackOp::RecInitParams(count)) => self.rec_init_params(count),
+			// Some(StackOp::RecInitEnd(count)) => self.rec_init_end(count),
 
-			Some(StackOp::Fun) => self.fun_start(),
-			Some(StackOp::FunRet) => self.fun_return(),
-			Some(StackOp::FunEnd) => self.fun_end(),
+			// Some(StackOp::Fun) => self.fun_start(),
+			// Some(StackOp::FunRet) => self.fun_return(),
+			// Some(StackOp::FunEnd) => self.fun_end(),
 
-			Some(StackOp::Call) => self.call_start(),
-			Some(StackOp::CallArg) => self.call_arg(),
-			Some(StackOp::CallEnd) => self.call_end(),
+			// Some(StackOp::Call) => self.call_start(),
+			// Some(StackOp::CallArg) => self.call_arg(),
+			// Some(StackOp::CallEnd) => self.call_end(),
 
 			Some(StackOp::Var) => self.var_start(),
 			Some(StackOp::VarEnd) => self.var_end(),
@@ -232,38 +237,9 @@ impl Parser {
 			Some(StackOp::IfElse) => self.if_else(),
 			Some(StackOp::IfEnd) => self.if_end(),
 
-			Some(StackOp::BinaryOp(op)) => {
-				let Some(StackValue::NodeId(right)) = self.values.pop() else {
-					return Err(error(self, "missing right-operand for BINARY-OP"));
-				};
-				let Some(StackValue::NodeId(left)) = self.values.pop() else {
-					return Err(error(self, "missing left-operand for BINARY-OP"));
-				};
-				let end = self.nodes.get(right)
-					.map(|n| n.info.end)
-					.expect("unable to get right-operand token-info");
-				let start = self.nodes.get(left)
-					.map(|n| n.info.start)
-					.expect("unable to get left-operand token-info");
-				let nx = self.nodes.new_binary(op, left, right, start..end)
-					.expect("unable to create new BINARY-OP");
-				self.values.push(StackValue::NodeId(nx));
-				Ok("Parsed BINARY-OP".into())
-			}
+			Some(StackOp::BinaryOp(op)) => self.binary_op(op),
 
-			Some(StackOp::UnaryOp(op)) => {
-				let Some(StackValue::NodeId(right)) = self.values.pop() else {
-					return Err(error(self, "missing right-operand for UNARY-OP"));
-				};
-				let end = self.nodes.get(right)
-					.map(|n| n.info.end)
-					.expect("unable to get right-operand token-info");
-				// TODO - srenshaw - save start location, so we can retrieve it here
-				let nx = self.nodes.new_unary(op, right, 0..end)
-					.expect("unable to create new UNARY-OP");
-				self.values.push(StackValue::NodeId(nx));
-				Ok("Parsed UNARY-OP".into())
-			}
+			Some(StackOp::UnaryOp(op)) => self.unary_op(op),
 
 			None => Ok(Step::Done),
 		}
@@ -278,8 +254,8 @@ impl Parser {
 		Ok(super::Output {
 			start,
 			store: self.nodes,
-			records: self.records,
-			functions: self.functions,
+			// records: self.rec_defs.keys().cloned().collect(),
+			// functions: self.fun_defs,
 			scopes: self.scopes,
 		})
 	}
@@ -388,7 +364,7 @@ impl Parser {
 		out
 	}
 
-	pub(super) fn ident(&mut self) -> Result<Rc<str>> {
+	pub(super) fn parse_ident(&mut self) -> Result<Rc<str>> {
 		let out = match self.peek(0).tt.clone() {
 			TokenType::Ident(s) => {
 				self.index += 1;
@@ -458,9 +434,7 @@ impl Parser {
 	}
 
 	fn if_start(&mut self) -> Result<Step> {
-		let start = self.peek(0).start;
-		self.match_token(TokenType::If)?;
-
+		let start = self.peek(-1).start;
 		self.values.push(StackValue::InfoStart(start));
 		self.stack.push(StackOp::IfThen);
 		self.stack.push(StackOp::Expr(0));
@@ -469,7 +443,6 @@ impl Parser {
 
 	fn if_then(&mut self) -> Result<Step> {
 		self.match_token(TokenType::OBrace)?;
-
 		self.values.push(StackValue::Scope(self.scopes.clone()));
 		self.stack.push(StackOp::IfElse);
 		self.stack.push(StackOp::Block(TokenType::CBrace, 0));
@@ -526,12 +499,12 @@ impl Parser {
 
 		let (start, cond, f_scope) = self.get_if_header("if_end", else_body)?;
 
-		let then_node = self.nodes.get(then_body)?;
-		let Expr::Block { scope: ref t_scope, ..} = then_node.expr else {
+		let then_node = self.nodes.get(then_body);
+		if then_node.expr() != &Expr::Block {
 			return Err(error(self, "Expected BLOCK expression in 'if_end'"));
 		};
 
-		t_scopes.add(t_scope.clone());
+		t_scopes.add(then_node.scope().clone());
 		self.scopes.add(f_scope);
 
 		self.scopes = ScopeTracker::merge(
@@ -566,10 +539,8 @@ impl Parser {
 			return Err(error(self, &format!("Expected INFO value in '{parser_name}'")));
 		};
 
-		let node = self.nodes.get(body)?;
-		let Expr::Block { ref scope, ..} = node.expr else {
-			return Err(error(self, &format!("Expected BLOCK expression in '{parser_name}'")));
-		};
+		let node = self.nodes.get(body);
+		let scope = node.scope();
 
 		Ok((start, cond, scope.clone()))
 	}
@@ -581,53 +552,38 @@ impl Parser {
 
 		let token = self.peek(0);
 		match token.tt {
-			TT::Rec => {
-				self.stack.push(StackOp::RecDef);
-				Ok("Found RECORD declaration".into())
-			}
-			TT::Fun => {
-				self.stack.push(StackOp::Fun);
-				Ok("Found FUNCTION declaration".into())
-			}
+			// TT::Rec => {
+			// 	self.index += 1;
+			// 	self.stack.push(StackOp::RecDef);
+			// 	Ok("Found RECORD declaration".into())
+			// }
+			// TT::Fun => {
+			// 	self.index += 1;
+			// 	self.stack.push(StackOp::Fun);
+			// 	Ok("Found FUNCTION declaration".into())
+			// }
 			TT::If => {
+				self.index += 1;
 				self.stack.push(StackOp::If);
 				Ok("Found IF expression".into())
 			}
 			TT::Var => {
+				self.index += 1;
 				self.stack.push(StackOp::Var);
 				Ok("Found VARIABLE declaration".into())
 			}
 			TT::While => {
+				self.index += 1;
 				self.stack.push(StackOp::While);
 				Ok("Found WHILE expression".into())
 			}
-			// TODO - srenshaw - Currently we can't parse binary-op expressions that start with an
-			// identifier, we'll need to fix this at some point.
+
 			TT::Ident(ref s) => {
 				let s = s.clone();
-				let info = token.range();
 				self.index += 1;
-
-				// HACK - srenshaw - We probably need a more robust way to distinguish between Record
-				// initialization, "ident -> block" sequences, function-calls, and assignment.
-				// TODO - srenshaw - Really we should look this name up to see whether it's
-				// a function, variable, or record name, then act appropriately.
-				if self.peek(1).tt == TokenType::OParen {
-					self.values.push(StackValue::InfoStart(info.start as u16));
-					self.values.push(StackValue::Ident(s));
-					self.stack.push(StackOp::Call);
-					Ok("Starting FUNCTION-CALL expression".into())
-				} else if self.peek(1).tt == TokenType::OBrace && self.peek(3).tt == TokenType::Colon {
-					self.values.push(StackValue::InfoStart(info.start as u16));
-					self.values.push(StackValue::Ident(s));
-					self.stack.push(StackOp::RecInit);
-					Ok("Starting RECORD initializer expression".into())
-				} else if let Some(nx) = self.scopes.find(&s) {
-					self.values.push(StackValue::NodeId(nx));
-					Ok(format!("Parsed IDENTIFIER '{s}' [{nx}]").into())
-				} else {
-					Err(Error::fatal(&self.source, info, &format!("Unknown IDENTIFIER '{s}'")))
-				}
+				let out = format!("Found IDENTIFIER '{s}'");
+				self.stack.push(StackOp::Ident(s));
+				Ok(out.into())
 			}
 
 			TT::Integer(_) => {
@@ -635,7 +591,7 @@ impl Parser {
 				let num = self.num()?;
 				let nx = self.nodes.new_num(num, ValueType::Int(Int::Bot), info);
 				self.values.push(StackValue::NodeId(nx));
-				Ok(format!("Parsed INTEGER '{num}' [{nx}]").into())
+				Ok(format!("Parsed INTEGER '{num}' [{nx:?}]").into())
 			}
 
 			TT::Fixed(_) => {
@@ -643,7 +599,7 @@ impl Parser {
 				let num = self.num()?;
 				let nx = self.nodes.new_num(num, ValueType::Fix(Fix::Bot), info);
 				self.values.push(StackValue::NodeId(nx));
-				Ok(format!("Parsed FIXED-POINT '{num}' [{nx}]").into())
+				Ok(format!("Parsed FIXED-POINT '{num}' [{nx:?}]").into())
 			}
 
 			TT::True => {
@@ -651,14 +607,14 @@ impl Parser {
 				self.index += 1;
 				let nx = self.nodes.new_bool(true, info);
 				self.values.push(StackValue::NodeId(nx));
-				Ok(format!("Parsed TRUE [{nx}]").into())
+				Ok(format!("Parsed TRUE [{nx:?}]").into())
 			}
 			TT::False => {
 				let info = token.range();
 				self.index += 1;
 				let nx = self.nodes.new_bool(false, info);
 				self.values.push(StackValue::NodeId(nx));
-				Ok(format!("Parsed FALSE [{nx}]").into())
+				Ok(format!("Parsed FALSE [{nx:?}]").into())
 			}
 
 			TT::Plus |
@@ -682,6 +638,7 @@ impl Parser {
 			}
 			TT::OBrace => {
 				// Open block
+				self.index += 1;
 				self.stack.push(StackOp::Block(TokenType::CBrace, 0));
 				Ok("Found '{'".into())
 			}
@@ -717,7 +674,8 @@ impl Parser {
 			TT::S8 | TT::S16 | TT::S32 |
 			TT::F16(_) | TT::F32(_) |
 			TT::OBrace | TT::CBrace |
-			TT::Colon | TT::Eof => Ok("End of expression".into()),
+			TT::Colon | TT::Comma |
+			TT::Eof => Ok("End of expression".into()),
 
 			TT::CParen |
 			TT::Semicolon => {
@@ -744,7 +702,29 @@ impl Parser {
 		}
 	}
 
+	fn ident(&mut self, id: Rc<str>) -> Result<Step> {
+		// let start = self.peek(-1).start;
+
+		// if self.peek(0).tt == TokenType::OParen {
+		// 	self.values.push(StackValue::InfoStart(start as u16));
+		// 	self.values.push(StackValue::Ident(id));
+		// 	self.stack.push(StackOp::Call);
+		// 	Ok("Starting FUNCTION-CALL expression".into())
+		// } else if self.peek(0).tt == TokenType::OBrace {
+		// 	self.values.push(StackValue::InfoStart(start as u16));
+		// 	self.values.push(StackValue::Ident(id));
+		// 	self.stack.push(StackOp::RecInit);
+		// 	Ok("Starting RECORD initializer expression".into())
+		// } else {
+			let nx = self.nodes.new_id(Rc::clone(&id), self.peek(-1).range());
+			self.values.push(StackValue::NodeId(nx));
+			Ok(format!("Parsed IDENTIFIER '{id}' [{nx:?}]").into())
+		// }
+	}
+
 	fn block(&mut self, closing_token: TokenType, count: usize) -> Result<Step> {
+		let inc_count = self.peek(0).tt != TokenType::Var;
+
 		// NOTE - srenshaw - Don't consume the closing token, as that will be
 		// handled by the return-site.
 		if self.peek(0).tt == closing_token {
@@ -766,7 +746,8 @@ impl Parser {
 			}
 		} else {
 			// We'll need to return here after we try to parse an expression
-			self.stack.push(StackOp::Block(closing_token, count + 1));
+			self.stack.push(StackOp::Block(closing_token,
+				if inc_count { count + 1 } else { count }));
 
 			// This is the expression we'll attempt to parse
 			self.stack.push(StackOp::Expr(0));
@@ -783,7 +764,7 @@ impl Parser {
 		}
 
 		let start = self.peek(0).range().start;
-		let fname = self.ident()?;
+		let fname = self.parse_ident()?;
 
 		self.match_token(TokenType::Colon)?;
 
@@ -794,228 +775,247 @@ impl Parser {
 			self.stack.push(StackOp::Param(closing_token));
 		}
 
-		let nx = self.nodes.new_id(&fname, vt.clone(), start..end);
-		self.values.push(StackValue::NodeId(nx));
+		self.values.push(StackValue::Info(start as u16, end as u16));
+		self.values.push(StackValue::Type(vt.clone()));
+		self.values.push(StackValue::Ident(fname.clone()));
 
 		Ok(format!("Parsed Parameter '{fname}: {vt}'").into())
 	}
 
-	fn rec_start(&mut self) -> Result<Step> {
-		let start = self.peek(0).start;
-		self.match_token(TokenType::Rec)?;
+	// fn rec_start(&mut self) -> Result<Step> {
+	// 	let start = self.peek(-1).start;
+	//
+	// 	let name = self.parse_ident()?;
+	// 	self.match_token(TokenType::OBrace)?;
+	//
+	// 	let out = format!("Parsed header for RECORD '{name}'");
+	// 	self.values.push(StackValue::Ident(name));
+	// 	self.values.push(StackValue::InfoStart(start));
+	// 	self.stack.push(StackOp::RecDefEnd);
+	// 	self.stack.push(StackOp::Param(TokenType::CBrace));
+	// 	Ok(out.into())
+	// }
 
-		let name = self.ident()?;
-		self.match_token(TokenType::OBrace)?;
+	// fn rec_end(&mut self) -> Result<Step> {
+	// 	let end = self.peek(0).range().end;
+	// 	self.match_token(TokenType::CBrace)?;
+	//
+	// 	let mut params = vec![];
+	// 	while let Some(StackValue::Ident(name)) = self.values.last() {
+	// 		let name = Rc::clone(name);
+	// 		self.values.pop();
+	// 		let Some(StackValue::Type(vtype)) = self.values.pop() else {
+	// 			return Err(error(self, "expected TYPE for param in 'rec_end'"));
+	// 		};
+	// 		let Some(StackValue::Info(_start, _end)) = self.values.pop() else {
+	// 			return Err(error(self, "expected INFO for param in 'rec_end'"));
+	// 		};
+	// 		params.push((name, vtype));
+	// 	}
+	//
+	// 	let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+	// 		return Err(error(self, "Expected INFO value in 'rec_end'"));
+	// 	};
+	//
+	// 	let Some(StackValue::Ident(name)) = self.values.pop() else {
+	// 		return Err(error(self, "Expected IDENTIFIER value in 'rec_end'"));
+	// 	};
+	//
+	// 	let nx = self.nodes.new_rec(&name, params, start as usize..end);
+	// 	let rd = RecDef { fields: params };
+	//
+	// 	let out = format!("Parsed RECORD '{name}' [{nx:?}]");
+	// 	self.scopes.insert(&name, nx);
+	// 	self.rec_defs.insert(name, rd);
+	// 	self.ast.push(nx);
+	// 	Ok(out.into())
+	// }
 
-		let out = format!("Parsed header for RECORD '{name}'");
-		self.values.push(StackValue::Ident(name));
-		self.values.push(StackValue::InfoStart(start));
-		self.stack.push(StackOp::RecDefEnd);
-		self.stack.push(StackOp::Param(TokenType::CBrace));
-		Ok(out.into())
-	}
+	// fn rec_init_start(&mut self) -> Result<Step> {
+	// 	self.match_token(TokenType::OBrace)?;
+	// 	if self.match_token(TokenType::CBrace).is_ok() {
+	// 		self.stack.push(StackOp::RecInitEnd(0));
+	// 		Ok("Parsed header for REC-INIT".into())
+	// 	} else {
+	// 		self.rec_init_param(0)
+	// 	}
+	// }
 
-	fn rec_end(&mut self) -> Result<Step> {
-		let end = self.peek(0).range().end;
-		self.match_token(TokenType::CBrace)?;
+	// fn rec_init_params(&mut self, count: usize) -> Result<Step> {
+	// 	if self.match_token(TokenType::Comma).is_ok() {
+	// 		self.rec_init_param(count)
+	// 	} else {
+	// 		self.match_token(TokenType::CBrace)?;
+	// 		self.stack.push(StackOp::RecInitEnd(count));
+	// 		Ok("End of REC-INIT params".into())
+	// 	}
+	// }
 
-		let mut params = vec![];
-		while let Some(StackValue::NodeId(nx)) = self.values.last() {
-			params.push(*nx);
-			self.values.pop();
-		}
+	// fn rec_init_param(&mut self, count: usize) -> Result<Step> {
+	// 	let name = self.parse_ident()?;
+	// 	self.match_token(TokenType::Colon)?;
+	// 	self.values.push(StackValue::Ident(name));
+	// 	self.stack.push(StackOp::RecInitParams(count + 1));
+	// 	self.stack.push(StackOp::Expr(0));
+	// 	Ok("Parsed REC-INIT param".into())
+	// }
 
-		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
-			return Err(error(self, "Expected INFO value in 'rec_end'"));
-		};
+	// fn rec_init_end(&mut self, count: usize) -> Result<Step> {
+	// 	let end = self.peek(-1).range().end;
+	//
+	// 	let mut params = vec![];
+	// 	for i in 0..count {
+	// 		let Some(StackValue::NodeId(expr)) = self.values.pop() else {
+	// 			return Err(error(self, &format!("expected {count} expressions in block, found {i}")));
+	// 		};
+	//
+	// 		let Some(StackValue::Ident(name)) = self.values.pop() else {
+	// 			return Err(error(self, &format!("expected {count} names in block, found {i}")));
+	// 		};
+	//
+	// 		params.push((name, expr));
+	// 	}
+	//
+	// 	let Some(StackValue::Ident(name)) = self.values.pop() else {
+	// 		todo!()
+	// 	};
+	//
+	// 	let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+	// 		todo!()
+	// 	};
+	//
+	// 	for (field_name, field_expr) in &params {
+	// 		self.scopes.insert(&format!("{name}-{field_name}").into(), *field_expr);
+	// 	}
+	//
+	// 	let nx = self.nodes.new_rec_init(&name, params, start as usize..end);
+	// 	self.values.push(StackValue::NodeId(nx));
+	// 	Ok("Parsed REC-INIT expression".into())
+	// }
 
-		let Some(StackValue::Ident(name)) = self.values.pop() else {
-			return Err(error(self, "Expected IDENTIFIER value in 'rec_end'"));
-		};
+	// fn fun_start(&mut self) -> Result<Step> {
+	// 	let start = self.peek(-1).start;
+	//
+	// 	let name = self.parse_ident()?;
+	// 	self.match_token(TokenType::OParen)?;
+	//
+	// 	let out = format!("Parsed header for FUNCTION '{name}'");
+	// 	self.values.push(StackValue::Ident(name));
+	// 	self.values.push(StackValue::InfoStart(start));
+	// 	self.stack.push(StackOp::FunRet);
+	// 	self.stack.push(StackOp::Param(TokenType::CParen));
+	// 	Ok(out.into())
+	// }
 
-		let nx = self.nodes.new_rec(&name, params, start as usize..end);
+	// fn fun_return(&mut self) -> Result<Step> {
+	// 	self.match_token(TokenType::CParen)?;
+	// 	let return_type = self.match_token(TokenType::RetArrow)
+	// 		.and_then(|_| self.value_type())
+	// 		.unwrap_or(ValueType::Unit);
+	// 	self.match_token(TokenType::OBrace)?;
+	//
+	// 	let out = format!("Parsed return-type for FUNCTION '{return_type}'");
+	// 	self.values.push(StackValue::Type(return_type));
+	// 	self.stack.push(StackOp::FunEnd);
+	// 	// Start a new scope for the function body
+	// 	self.scopes.push();
+	// 	self.stack.push(StackOp::Block(TokenType::CBrace, 0));
+	//
+	// 	Ok(out.into())
+	// }
 
-		let out = format!("Parsed RECORD '{name}' [{nx}]");
-		self.scopes.insert(&name, nx);
-		self.records.insert(name);
-		self.ast.push(nx);
-		Ok(out.into())
-	}
+	// fn fun_end(&mut self) -> Result<Step> {
+	// 	let end = self.peek(0).range().end;
+	// 	self.match_token(TokenType::CBrace)?;
+	//
+	// 	let Some(StackValue::NodeId(body)) = self.values.pop() else {
+	// 		return Err(error(self, "expected NODE_ID value in 'fun_end'"));
+	// 	};
+	//
+	// 	let Some(StackValue::Type(rtype)) = self.values.pop() else {
+	// 		return Err(error(self, "expected TYPE value in 'fun_end'"));
+	// 	};
+	//
+	// 	let mut params = vec![];
+	// 	while let Some(StackValue::Ident(name)) = self.values.last() {
+	// 		let name = Rc::clone(name);
+	// 		self.values.pop();
+	// 		let Some(StackValue::Type(vtype)) = self.values.pop() else {
+	// 			return Err(error(self, "expected TYPE for param in 'fun_end'"));
+	// 		};
+	// 		let Some(StackValue::Info(_start, _end)) = self.values.pop() else {
+	// 			return Err(error(self, "expected INFO for param in 'fun_end'"));
+	// 		};
+	// 		params.push((name, vtype));
+	// 	}
+	//
+	// 	let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+	// 		return Err(error(self, "expected INFO value in 'fun_end'"));
+	// 	};
+	//
+	// 	let Some(StackValue::Ident(name)) = self.values.pop() else {
+	// 		return Err(error(self, "expected IDENTIFIER value in 'fun_end'"));
+	// 	};
+	//
+	// 	let start = start as usize;
+	// 	let nx = self.nodes.new_fun(&name, params, rtype, body, start..end);
+	//
+	// 	let out = format!("Parsed FUNCTION '{name}' [{nx:?}]");
+	// 	self.scopes.insert(&name, nx);
+	// 	self.fun_defs.insert(name);
+	// 	self.ast.push(nx);
+	// 	Ok(out.into())
+	// }
 
-	fn rec_init_start(&mut self) -> Result<Step> {
-		self.match_token(TokenType::OBrace)?;
-		if self.match_token(TokenType::CBrace).is_ok() {
-			self.stack.push(StackOp::RecInitEnd(0));
-			Ok("Parsed header for REC-INIT".into())
-		} else {
-			self.rec_init_param(0)
-		}
-	}
+	// fn call_start(&mut self) -> Result<Step> {
+	// 	self.match_token(TokenType::OParen)?;
+	// 	if self.match_token(TokenType::CParen).is_ok() {
+	// 		// no function arguments, jump to call-end
+	// 		self.stack.push(StackOp::CallEnd);
+	// 	} else {
+	// 		self.stack.push(StackOp::CallArg);
+	// 		self.stack.push(StackOp::Expr(0));
+	// 	}
+	// 	Ok("parsed header for FN-CALL".into())
+	// }
 
-	fn rec_init_params(&mut self, count: usize) -> Result<Step> {
-		if self.match_token(TokenType::Comma).is_ok() {
-			self.rec_init_param(count)
-		} else {
-			self.match_token(TokenType::CBrace)?;
-			self.stack.push(StackOp::RecInitEnd(count));
-			Ok("End of REC-INIT params".into())
-		}
-	}
+	// fn call_arg(&mut self) -> Result<Step> {
+	// 	if self.match_token(TokenType::Comma).is_ok() {
+	// 		self.stack.push(StackOp::CallArg);
+	// 		self.stack.push(StackOp::Expr(0));
+	// 		Ok("parsed FN-CALL arg".into())
+	// 	} else {
+	// 		self.stack.push(StackOp::CallEnd);
+	// 		Ok("finished FN-CALL args".into())
+	// 	}
+	// }
 
-	fn rec_init_param(&mut self, count: usize) -> Result<Step> {
-		let name = self.ident()?;
-		self.match_token(TokenType::Colon)?;
-		self.values.push(StackValue::Ident(name));
-		self.stack.push(StackOp::RecInitParams(count + 1));
-		self.stack.push(StackOp::Expr(0));
-		Ok("Parsed REC-INIT param".into())
-	}
-
-	fn rec_init_end(&mut self, count: usize) -> Result<Step> {
-		let end = self.peek(-1).range().end;
-
-		let mut params = vec![];
-		for i in 0..count {
-			let Some(StackValue::NodeId(expr)) = self.values.pop() else {
-				return Err(error(self, &format!("expected {count} expressions in block, found {i}")));
-			};
-
-			let Some(StackValue::Ident(name)) = self.values.pop() else {
-				return Err(error(self, &format!("expected {count} names in block, found {i}")));
-			};
-
-			params.push((name, expr));
-		}
-
-		let Some(StackValue::Ident(name)) = self.values.pop() else {
-			todo!()
-		};
-
-		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
-			todo!()
-		};
-
-		let nx = self.nodes.new_rec_init(&name, params, start as usize..end);
-		self.values.push(StackValue::NodeId(nx));
-		Ok("Parsed REC-INIT expression".into())
-	}
-
-	fn fun_start(&mut self) -> Result<Step> {
-		let start = self.peek(0).start;
-		self.match_token(TokenType::Fun)?;
-		let name = self.ident()?;
-		self.match_token(TokenType::OParen)?;
-
-		let out = format!("Parsed header for FUNCTION '{name}'");
-		self.values.push(StackValue::Ident(name));
-		self.values.push(StackValue::InfoStart(start));
-		self.stack.push(StackOp::FunRet);
-		self.stack.push(StackOp::Param(TokenType::CParen));
-		Ok(out.into())
-	}
-
-	fn fun_return(&mut self) -> Result<Step> {
-		self.match_token(TokenType::CParen)?;
-		let return_type = self.match_token(TokenType::RetArrow)
-			.and_then(|_| self.value_type())
-			.unwrap_or(ValueType::Unit);
-		self.match_token(TokenType::OBrace)?;
-
-		let out = format!("Parsed return-type for FUNCTION '{return_type}'");
-		self.values.push(StackValue::Type(return_type));
-		self.stack.push(StackOp::FunEnd);
-		// Start a new scope for the function body
-		self.scopes.push();
-		self.stack.push(StackOp::Block(TokenType::CBrace, 0));
-
-		Ok(out.into())
-	}
-
-	fn fun_end(&mut self) -> Result<Step> {
-		let end = self.peek(0).range().end;
-		self.match_token(TokenType::CBrace)?;
-
-		let Some(StackValue::NodeId(body)) = self.values.pop() else {
-			return Err(error(self, "expected NODE_ID value in 'fun_end'"));
-		};
-
-		let Some(StackValue::Type(rtype)) = self.values.pop() else {
-			return Err(error(self, "expected TYPE value in 'fun_end'"));
-		};
-
-		let mut params = vec![];
-		while let Some(StackValue::NodeId(nx)) = self.values.last() {
-			params.push(*nx);
-			self.values.pop();
-		}
-
-		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
-			return Err(error(self, "expected INFO value in 'fun_end'"));
-		};
-
-		let Some(StackValue::Ident(name)) = self.values.pop() else {
-			return Err(error(self, "expected IDENTIFIER value in 'fun_end'"));
-		};
-
-		let start = start as usize;
-		let nx = self.nodes.new_fun(&name, params, rtype, body, start..end);
-
-		let out = format!("Parsed FUNCTION '{name}' [{nx}]");
-		self.scopes.insert(&name, nx);
-		self.functions.insert(name);
-		self.ast.push(nx);
-		Ok(out.into())
-	}
-
-	fn call_start(&mut self) -> Result<Step> {
-		self.match_token(TokenType::OParen)?;
-		if self.match_token(TokenType::CParen).is_ok() {
-			// no function arguments, jump to call-end
-			self.stack.push(StackOp::CallEnd);
-		} else {
-			self.stack.push(StackOp::CallArg);
-			self.stack.push(StackOp::Expr(0));
-		}
-		Ok("parsed header for FN-CALL".into())
-	}
-
-	fn call_arg(&mut self) -> Result<Step> {
-		if self.match_token(TokenType::Comma).is_ok() {
-			self.stack.push(StackOp::CallArg);
-			self.stack.push(StackOp::Expr(0));
-			Ok("parsed FN-CALL arg".into())
-		} else {
-			self.stack.push(StackOp::CallEnd);
-			Ok("finished FN-CALL args".into())
-		}
-	}
-
-	fn call_end(&mut self) -> Result<Step> {
-		let end = self.peek(-1).range().end;
-
-		let mut args = vec![];
-		while let Some(StackValue::NodeId(nx)) = self.values.last() {
-			args.push(*nx);
-			self.values.pop();
-		}
-
-		let Some(StackValue::Ident(name)) = self.values.pop() else {
-			return Err(error(self, "missing name for FN-CALL"));
-		};
-
-		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
-			return Err(error(self, "missing info for FN-CALL"));
-		};
-
-		let nx = self.nodes.new_call(&name, args, start as usize..end);
-		self.values.push(StackValue::NodeId(nx));
-		Ok(format!("Finished parsing FN-CALL '{name}' [{nx}]").into())
-	}
+	// fn call_end(&mut self) -> Result<Step> {
+	// 	let end = self.peek(-1).range().end;
+	//
+	// 	let mut args = vec![];
+	// 	while let Some(StackValue::NodeId(nx)) = self.values.last() {
+	// 		args.push(*nx);
+	// 		self.values.pop();
+	// 	}
+	//
+	// 	let Some(StackValue::Ident(name)) = self.values.pop() else {
+	// 		return Err(error(self, "missing name for FN-CALL"));
+	// 	};
+	//
+	// 	let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+	// 		return Err(error(self, "missing info for FN-CALL"));
+	// 	};
+	//
+	// 	let nx = self.nodes.new_call(&name, args, start as usize..end);
+	// 	self.values.push(StackValue::NodeId(nx));
+	// 	Ok(format!("Finished parsing FN-CALL '{name}' [{nx:?}]").into())
+	// }
 
 	fn var_start(&mut self) -> Result<Step> {
-		let start = self.peek(0).start;
-		self.match_token(TokenType::Var)?;
-		let name = self.ident()?;
+		let start = self.peek(-1).start;
+
+		let name = self.parse_ident()?;
 		let vtype = self.match_token(TokenType::Colon)
 			.and_then(|_| self.value_type())
 			.unwrap_or(ValueType::Any);
@@ -1043,7 +1043,7 @@ impl Parser {
 	}
 
 	fn var_end(&mut self) -> Result<Step> {
-		let end = self.peek(-1).range().end;
+		let _end = self.peek(-1).range().end;
 
 		let Some(StackValue::NodeId(body)) = self.values.pop() else {
 			return Err(error(self, "Expected NODE_ID value in 'var_end'"));
@@ -1057,29 +1057,18 @@ impl Parser {
 			return Err(error(self, "Expected IDENTIFIER value in 'var_end'"));
 		};
 
-		let Some(StackValue::InfoStart(start)) = self.values.pop() else {
+		let Some(StackValue::InfoStart(_start)) = self.values.pop() else {
 			return Err(error(self, "expected INFO value in 'var_end'"));
 		};
 
 		// Add to the current scope.
-		self.scopes.insert(&name, body);
+		self.scopes.insert(&name, vtype, body);
 
-		let nx = if self.nodes.get(body)
-			.map(|n| n.expr.is_const(&self.nodes))
-			.unwrap_or_default()
-		{
-			body
-		} else {
-			self.nodes.new_var(&name, vtype, Some(body), start as usize..end)
-		};
-
-		self.values.push(StackValue::NodeId(nx));
-		Ok(format!("Parsed VARIABLE '{name}' [{nx}]").into())
+		Ok(format!("Parsed VARIABLE '{name}' [{body:?}]").into())
 	}
 
 	fn while_start(&mut self) -> Result<Step> {
-		let start = self.peek(0).start;
-		self.match_token(TokenType::While)?;
+		let start = self.peek(-1).start;
 		self.values.push(StackValue::InfoStart(start));
 		self.stack.push(StackOp::WhileBody);
 		self.stack.push(StackOp::Expr(0));
@@ -1114,6 +1103,58 @@ impl Parser {
 		self.values.push(StackValue::NodeId(nx));
 		Ok("Parsed WHILE loop".into())
 	}
+
+	fn binary_op(&mut self, op: BinaryOp) -> Result<Step> {
+		let Some(StackValue::NodeId(right)) = self.values.pop() else {
+			return Err(error(self, "missing right-operand for BINARY-OP"));
+		};
+		let Some(StackValue::NodeId(left)) = self.values.pop() else {
+			return Err(error(self, "missing left-operand for BINARY-OP"));
+		};
+
+		let rnode = self.nodes.get(right);
+		let lnode = self.nodes.get(left);
+
+		if op == BinaryOp::Accessor {
+			match (lnode.expr(), rnode.expr()) {
+				(Expr::RecInit, Expr::Id) => {
+					let Some((_,nx)) = self.scopes.find(&format!("{}-{}", lnode.name(), rnode.name()).into()) else {
+						return Err(error(self, &format!("failed ACCESS '{}.{}'", lnode.name(), rnode.name())));
+					};
+					self.values.push(StackValue::NodeId(nx));
+					return Ok(format!("Parsed ACCESS for '{}.{}'", lnode.name(), rnode.name()).into());
+				}
+				(Expr::Id, rexpr) => {
+					return Err(error(self, &format!("failed ACCESS '{}.{rexpr:?}'", lnode.name())));
+				}
+				(lexpr, Expr::Id) => {
+					return Err(error(self, &format!("failed ACCESS '{lexpr:?}.{}'", rnode.name())));
+				}
+				(lexpr, rexpr) => {
+					return Err(error(self, &format!("failed ACCESS '{lexpr:?}.{rexpr:?}'")));
+				}
+			}
+		}
+
+		let end = rnode.info().end;
+		let start = lnode.info().start;
+		let nx = self.nodes.new_binary(op, left, right, start..end)
+			.expect("unable to create new BINARY-OP");
+		self.values.push(StackValue::NodeId(nx));
+		Ok("Parsed BINARY-OP".into())
+	}
+
+	fn unary_op(&mut self, op: UnaryOp) -> Result<Step> {
+		let Some(StackValue::NodeId(right)) = self.values.pop() else {
+			return Err(error(self, "missing right-operand for UNARY-OP"));
+		};
+		let end = self.nodes.get(right).info().end;
+		// TODO - srenshaw - save start location, so we can retrieve it here
+		let nx = self.nodes.new_unary(op, right, 0..end)
+			.expect("unable to create new UNARY-OP");
+		self.values.push(StackValue::NodeId(nx));
+		Ok("Parsed UNARY-OP".into())
+	}
 }
 
 impl ScopeTracker {
@@ -1122,14 +1163,14 @@ impl ScopeTracker {
 		self.0.push(scope)
 	}
 
-	pub(super) fn insert(&mut self, name: &Rc<str>, nx: NodeId) -> NodeId {
+	pub(super) fn insert(&mut self, name: &Rc<str>, vt: ValueType, nx: NodeId) -> NodeId {
 		// let index = self.0.len();
 		if let Some(scope) = self.0.last_mut() {
 			// println!("add {name} : {nx} to scope {}", index-1);
-			scope.insert(Rc::clone(name), nx);
+			scope.insert(Rc::clone(name), (vt, nx));
 			nx
 		} else {
-			panic!("add {name} : {nx} with no base scope");
+			panic!("add {name} : {vt} = {nx:?} with no base scope");
 		}
 	}
 
@@ -1145,10 +1186,10 @@ impl ScopeTracker {
 		self.0.pop()
 	}
 
-	pub fn find(&self, id: &Rc<str>) -> Option<NodeId> {
+	pub fn find(&self, id: &Rc<str>) -> Option<(ValueType, NodeId)> {
 		for scope in self.0.iter().rev() {
-			if let Some(&nx) = scope.get(id) {
-				return Some(nx);
+			if let Some(nx) = scope.get(id) {
+				return Some(nx.clone());
 			}
 		}
 		None
@@ -1159,10 +1200,7 @@ impl ScopeTracker {
 		mut t_scopes: ScopeTracker,
 		mut f_scopes: ScopeTracker,
 	) -> Result<ScopeTracker> {
-		// println!("merging scopes");
-
 		let mut scopes = vec![];
-
 		let mut t_iter = t_scopes.0.iter_mut();
 		let mut f_iter = f_scopes.0.iter_mut();
 		loop {
@@ -1173,17 +1211,17 @@ impl ScopeTracker {
 					for (name, tnx) in t_scope.iter() {
 						let nx = f_scope.remove(name)
 							.filter(|fnx| tnx != fnx)
-							.map(|fnx| nodes.new_phi(*tnx, fnx))
-							.unwrap_or(Ok(*tnx))?;
-						scope.insert(Rc::clone(name), nx);
+							.map(|fnx| nodes.new_phi(tnx.1, fnx.1))
+							.unwrap_or(Ok(tnx.1))?;
+						scope.insert(Rc::clone(name), (tnx.0.clone(), nx));
 					}
 
 					for (name, fnx) in f_scope {
 						let nx = t_scope.remove(name)
 							.filter(|tnx| tnx != fnx)
-							.map(|tnx| nodes.new_phi(tnx, *fnx))
-							.unwrap_or(Ok(*fnx))?;
-						scope.insert(Rc::clone(name), nx);
+							.map(|tnx| nodes.new_phi(tnx.1, fnx.1))
+							.unwrap_or(Ok(fnx.1))?;
+						scope.insert(Rc::clone(name), (fnx.0.clone(), nx));
 					}
 				}
 
@@ -1191,7 +1229,7 @@ impl ScopeTracker {
 				(Some(o_scope), None) |
 				(None, Some(o_scope)) => {
 					for (name, nx) in o_scope {
-						scope.insert(Rc::clone(name), *nx);
+						scope.insert(Rc::clone(name), nx.clone());
 					}
 				}
 
@@ -1212,38 +1250,39 @@ fn test_merge() {
 	let n1 = n.new_num(0, ValueType::Any, 0..0);
 	let n2 = n.new_num(0, ValueType::Any, 0..0);
 	let n3 = n.new_num(0, ValueType::Any, 0..0);
-	let n4 = n3 + 1;
 
 	let mut s1 = ScopeTracker::default();
 	s1.push();
-	s1.insert(&"a".into(), n0);
+	s1.insert(&"a".into(), ValueType::Any, n0);
 	s1.push();
-	s1.insert(&"b".into(), n1);
-	s1.insert(&"c".into(), n2);
+	s1.insert(&"b".into(), ValueType::Any, n1);
+	s1.insert(&"c".into(), ValueType::Any, n2);
 	s1.push();
 
 	let mut s2 = ScopeTracker::default();
 	s2.push();
 	s2.push();
-	s2.insert(&"a".into(), n1);
-	s2.insert(&"b".into(), n3);
-	s2.insert(&"c".into(), n2);
+	s2.insert(&"a".into(), ValueType::Any, n1);
+	s2.insert(&"b".into(), ValueType::Any, n3);
+	s2.insert(&"c".into(), ValueType::Any, n2);
 
 	let s3 = ScopeTracker::merge(&mut n, s1, s2)
 		.expect("unable to merge s1 and s2");
 	assert_eq!(s3.0.len(), 3);
 
-	let phi = n.get(n4)
-		.unwrap_or_else(|_| panic!("no phi node for id 'b'\n\nNodes: {n:?}"));
-	assert_eq!(phi.expr, Expr::Phi { lhs: n1, rhs: n3 });
+	let (_,n4) = s3.find(&"b".into())
+		.expect("missing 'b' node after merge");
+	let phi = n.get(n4);
+	assert_eq!(phi.expr(), &Expr::Phi);
+	assert_eq!(phi.inputs(), &[n1, n3]);
 
 	let mut temp1 = Scope::default();
-	temp1.insert("a".into(), n0);
+	temp1.insert("a".into(), (ValueType::Any, n0));
 	assert_eq!(s3.0[0], temp1);
 	let mut temp2 = Scope::default();
-	temp2.insert("a".into(), n1);
-	temp2.insert("b".into(), n4);
-	temp2.insert("c".into(), n2);
+	temp2.insert("a".into(), (ValueType::Any, n1));
+	temp2.insert("b".into(), (ValueType::Any, n4));
+	temp2.insert("c".into(), (ValueType::Any, n2));
 	assert_eq!(s3.0[1], temp2);
 }
 

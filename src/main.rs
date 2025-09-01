@@ -8,6 +8,7 @@ use tracing::{info,debug};
 mod tokens;
 mod lexer;
 mod parser;
+mod visualizer;
 
 const TEST_INPUT: &str = "
 rec vec {
@@ -154,7 +155,11 @@ fn main() -> miette::Result<()> {
 		}
 	}
 
-	let output = format!("AST: {out:?}");
+	// let output = format!("AST: {out:?}");
+
+	let start_node = out.store.get(out.start);
+	let output = visualizer::to_mermaid(&start_node);
+	let out_file_name = format!("{}.md", out_file_name);
 
 	// std::fs::write("test.out", output)
 	std::fs::write(&out_file_name, output)

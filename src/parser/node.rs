@@ -11,7 +11,7 @@ new_key_type! { pub(crate) struct NodeId; }
 
 pub(crate) struct NodeRef<'a> {
 	id: NodeId,
-	pub(crate) store: &'a NodeStore,
+	store: &'a NodeStore,
 }
 
 impl NodeRef<'_> {
@@ -48,6 +48,10 @@ impl NodeRef<'_> {
 		self.store.inputs.get(self.id)
 			.map(|s| s.as_slice())
 			.unwrap_or(&[])
+	}
+
+	pub(crate) fn input(&self, nx: NodeId) -> NodeRef {
+		self.store.get(nx)
 	}
 
 	pub(crate) fn scope(&self) -> &Scope {
@@ -402,14 +406,14 @@ impl NodeRef<'_> {
 			Expr::Bool => true,
 			Expr::Phi => {
 				let inputs = self.inputs();
-				let lhs = self.store.get(inputs[0]);
-				let rhs = self.store.get(inputs[1]);
+				let lhs = self.input(inputs[0]);
+				let rhs = self.input(inputs[1]);
 				lhs.is_const() && rhs.is_const()
 			}
 			Expr::Id => false,
 			Expr::Block => {
 				let inputs = self.inputs();
-				self.store.get(inputs[0]).is_const()
+				self.input(inputs[0]).is_const()
 			}
 			Expr::Rec => true,
 			Expr::Fun => true,
@@ -422,12 +426,12 @@ impl NodeRef<'_> {
 			Expr::RecInit => false,
 			Expr::Unary => {
 				let inputs = self.inputs();
-				self.store.get(inputs[0]).is_const()
+				self.input(inputs[0]).is_const()
 			}
 			Expr::Binary => {
 				let inputs = self.inputs();
-				let lhs = self.store.get(inputs[0]);
-				let rhs = self.store.get(inputs[1]);
+				let lhs = self.input(inputs[0]);
+				let rhs = self.input(inputs[1]);
 				lhs.is_const() && rhs.is_const()
 			}
 			Expr::FnCall => false,
@@ -451,7 +455,7 @@ impl fmt::Display for NodeRef<'_> {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
 		match self.expr() {
 			Expr::Block => {
-				let scope = self.store.scopes[self.id].keys()
+				let scope = self.scope().keys()
 					.map(|name| name.to_string())
 					.reduce(|out, name| format!("{out},{name}"))
 					.unwrap_or_default();

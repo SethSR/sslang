@@ -108,7 +108,6 @@ pub(crate) struct Parser {
 	// Stack
 	pub(crate) stack: Vec<StackOp>,
 	pub(crate) values: Vec<StackValue>,
-	pub(crate) ast: Vec<NodeId>,
 }
 
 impl Parser {
@@ -131,7 +130,6 @@ impl Parser {
 
 			stack: vec![StackOp::Block(TokenType::Eof, 0)],
 			values: vec![],
-			ast: vec![],
 		}
 	}
 
@@ -169,7 +167,6 @@ impl Parser {
 			|s,_| {  println!("{s}"); true },
 			|s,_| {  println!("{s}"); false },
 			|s,_| { eprintln!("{s}"); continue_on_error },
-			|s,_| { eprintln!("{s}"); false },
 			&mut String::new(),
 		)
 	}
@@ -180,7 +177,6 @@ impl Parser {
 		on_next: impl FnOnce(String, &mut T) -> bool,
 		on_done: impl FnOnce(String, &mut T) -> bool,
 		on_erep: impl FnOnce(String, &mut T) -> bool,
-		on_exit: impl FnOnce(String, &mut T) -> bool,
 		out: &mut T,
 	) -> bool {
 		match self.step() {
@@ -192,9 +188,6 @@ impl Parser {
 			}
 			Err(Error::Report(e)) => {
 				on_erep(format!("[erep] {e}"), out)
-			}
-			Err(Error::Fatal(e)) => {
-				on_exit(format!("[exit] {e}"), out)
 			}
 		}
 	}

@@ -355,7 +355,6 @@ impl AppData {
 											|m,s| { *s = m; true },
 											|m,s| { *s = m; false },
 											|m,s| { *s = m; true },
-											|m,s| { *s = m; false },
 											&mut self.status,
 										) {}
 
@@ -404,7 +403,6 @@ impl AppData {
 											|m,out| { *out = m; true },
 											|m,out| { *out = m; false },
 											|m,out| { *out = m; true },
-											|m,out| { *out = m; false },
 											&mut self.status,
 										) {
 											self.state = AppState::Parsing(Some(parser));

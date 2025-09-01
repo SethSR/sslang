@@ -1,6 +1,5 @@
 
 use std::ops::Range;
-use std::rc::Rc;
 
 #[macro_use]
 mod error;
@@ -10,7 +9,7 @@ mod operators;
 mod parser;
 mod types;
 
-pub(crate) use node::{Expr, NodeId, NodeStore};
+pub(crate) use node::{Expr, NodeId, NodeRef, NodeStore};
 pub(crate) use operators::{BinaryOp, UnaryOp};
 pub(crate) use parser::{Parser, ScopeTracker};
 pub(crate) use types::{Meet, ValueType, Int, Fix};

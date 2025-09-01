@@ -15,6 +15,11 @@ pub(crate) struct NodeRef<'a> {
 }
 
 impl NodeRef<'_> {
+	pub(crate) fn id(&self) -> u64 {
+		use slotmap::Key;
+		self.id.data().as_ffi()
+	}
+
 	pub(crate) fn expr(&self) -> &Expr {
 		&self.store.data[self.id].expr
 	}
@@ -174,22 +179,6 @@ impl NodeStore {
 		self.paramlists.insert(nx, params);
 		self.types.insert(nx, rtype);
 		self.inputs.insert(nx, vec![body]);
-		nx
-	}
-
-	pub(crate) fn new_var(
-		&mut self,
-		name: &Rc<str>,
-		vtype: ValueType,
-		body: Option<NodeId>,
-		info: TokenInfo,
-	) -> NodeId {
-		let name = Rc::clone(name);
-		let nx = self.data.insert(Node::new(Expr::Var, vtype, info));
-		self.names.insert(nx, name);
-		if let Some(bx) = body {
-			self.inputs.insert(nx, vec![bx]);
-		}
 		nx
 	}
 

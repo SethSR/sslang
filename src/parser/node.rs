@@ -54,6 +54,16 @@ impl NodeRef<'_> {
 		self.store.get(nx)
 	}
 
+	pub(crate) fn outputs(&self) -> &[NodeId] {
+		self.store.outputs.get(self.id)
+			.map(|s| s.as_slice())
+			.unwrap_or(&[])
+	}
+
+	pub(crate) fn output(&self, nx: NodeId) -> NodeRef {
+		self.store.get(nx)
+	}
+
 	pub(crate) fn scope(&self) -> &Scope {
 		&self.store.scopes[self.id]
 	}
@@ -101,6 +111,7 @@ pub(crate) struct NodeStore {
 	pub(crate) names     : SecondaryMap<NodeId, Rc<str>>,
 	pub(crate) bools     : SecondaryMap<NodeId, bool>,
 	pub(crate) inputs    : SecondaryMap<NodeId, Vec<NodeId>>,
+	pub(crate) outputs   : SecondaryMap<NodeId, Vec<NodeId>>,
 	pub(crate) scopes    : SecondaryMap<NodeId, Scope>,
 	pub(crate) paramlists: SecondaryMap<NodeId, Vec<(Rc<str>, ValueType)>>,
 	pub(crate) arglists  : SecondaryMap<NodeId, Vec<(Rc<str>, NodeId)>>,
@@ -381,7 +392,7 @@ impl Node {
 	}
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Expr {
 	Num,
 	Id,

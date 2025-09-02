@@ -1,3 +1,4 @@
 /target
+/.obsidian
 Cargo.lock
 log.txt

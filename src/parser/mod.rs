@@ -29,9 +29,3 @@ pub(crate) struct Output {
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-pub(crate) type TypedIdent = (Rc<str>, ValueType);
-
-#[cfg(test)]
-use crate::tokens::Token;
-

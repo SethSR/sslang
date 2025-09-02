@@ -2,20 +2,17 @@
 use std::rc::Rc;
 
 use crate::lexer;
+use crate::tokens::Token;
 
 use super::{
 	BinaryOp,
 	Expr,
 	Int,
-	NodeId,
-	NodeStore,
 	Output,
-	Token,
-	TypedIdent,
 	UnaryOp,
 	ValueType as VT,
 };
-use super::parser::{Parser, Scope, ScopeTracker};
+use super::parser::Parser;
 use super::node::NodeRef;
 
 fn eval(
@@ -65,16 +62,16 @@ impl PartialEq<NodeRef<'_>> for Pattern<'_> {
 			(Self::Const(a), Expr::Num) => *a == rhs.number(),
 			(Self::BinOp(op, lnx, rnx), Expr::Binary) => {
 				*op == rhs.binary_op() &&
-					**lnx == rhs.store.get(rhs.inputs()[0]) &&
-					**rnx == rhs.store.get(rhs.inputs()[1])
+					**lnx == rhs.input(rhs.inputs()[0]) &&
+					**rnx == rhs.input(rhs.inputs()[1])
 			}
 			(Self::UnOp(op, rnx), Expr::Unary) => {
 				*op == rhs.unary_op() &&
-					**rnx == rhs.store.get(rhs.inputs()[0])
+					**rnx == rhs.input(rhs.inputs()[0])
 			}
 			(Self::Block(patterns,scope), Expr::Block) => {
 				let rscope = rhs.scope();
-				patterns == &rhs.inputs().iter().map(|nx| rhs.store.get(*nx)).collect::<Vec<_>>() &&
+				patterns == &rhs.inputs().iter().map(|nx| rhs.input(*nx)).collect::<Vec<_>>() &&
 					scope.iter().all(|s| rscope.contains_key(s))
 			}
 			(Self::Id(id), Expr::Id) => {
@@ -87,14 +84,14 @@ impl PartialEq<NodeRef<'_>> for Pattern<'_> {
 			(Self::If(cond,tbody,fbody), Expr::If) => {
 				match rhs.inputs() {
 					[rcond, rtbody, rfbody] => {
-						**cond == rhs.store.get(*rcond) &&
-							**tbody == rhs.store.get(*rtbody) &&
-							**fbody == rhs.store.get(*rfbody)
+						**cond == rhs.input(*rcond) &&
+							**tbody == rhs.input(*rtbody) &&
+							**fbody == rhs.input(*rfbody)
 					}
 					[rcond, rtbody] => {
 						// TODO - srenshaw - Should also ensure fbody is empty
-						**cond == rhs.store.get(*rcond) &&
-							**tbody == rhs.store.get(*rtbody)
+						**cond == rhs.input(*rcond) &&
+							**tbody == rhs.input(*rtbody)
 					}
 					_ => false,
 				}
@@ -102,8 +99,8 @@ impl PartialEq<NodeRef<'_>> for Pattern<'_> {
 			(Self::While(cond,body), Expr::While) => {
 				match rhs.inputs() {
 					[rcond, rbody] => {
-						**cond == rhs.store.get(*rcond) &&
-							**body == rhs.store.get(*rbody)
+						**cond == rhs.input(*rcond) &&
+							**body == rhs.input(*rbody)
 					}
 					_ => false,
 				}

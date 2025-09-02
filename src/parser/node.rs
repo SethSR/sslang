@@ -29,7 +29,7 @@ impl NodeRef<'_> {
 	}
 
 	pub(crate) fn info(&self) -> &TokenInfo {
-		&self.store.data[self.id].info
+		&self.store.info[self.id]
 	}
 
 	pub(crate) fn number(&self) -> i64 {
@@ -103,10 +103,13 @@ impl NodeRef<'_> {
 /// Expr::BinaryOp -> op: BinaryOp, lhs: NodeId, rhs: NodeId
 /// Expr::FnCall   -> name: Rc<str>, args: Vec<NodeId>
 /// Expr::Phi      -> lhs: NodeId, rhs: NodeId
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct NodeStore {
 	data: SlotMap<NodeId, Node>,
 
+	pub(crate) start: NodeId,
+
+	pub(crate) info      : SecondaryMap<NodeId, TokenInfo>,
 	pub(crate) numbers   : SecondaryMap<NodeId, i64>,
 	pub(crate) names     : SecondaryMap<NodeId, Rc<str>>,
 	pub(crate) bools     : SecondaryMap<NodeId, bool>,
@@ -120,6 +123,32 @@ pub(crate) struct NodeStore {
 	pub(crate) binary_ops: SecondaryMap<NodeId, BinaryOp>,
 }
 
+impl Default for NodeStore {
+	fn default() -> Self {
+		let mut data = SlotMap::default();
+		let start = data.insert(Node::new(Expr::Start, ValueType::Unit));
+
+		Self {
+			data,
+
+			start,
+
+			info      : SecondaryMap::default(),
+			numbers   : SecondaryMap::default(),
+			names     : SecondaryMap::default(),
+			bools     : SecondaryMap::default(),
+			inputs    : SecondaryMap::default(),
+			outputs   : SecondaryMap::default(),
+			scopes    : SecondaryMap::default(),
+			paramlists: SecondaryMap::default(),
+			arglists  : SecondaryMap::default(),
+			types     : SecondaryMap::default(),
+			unary_ops : SecondaryMap::default(),
+			binary_ops: SecondaryMap::default(),
+		}
+	}
+}
+
 impl NodeStore {
 	pub fn iter<'a>(&'a self) -> impl Iterator<Item=NodeRef<'a>> {
 		self.data.iter().map(|(id,_)| NodeRef { id, store: self })
@@ -127,11 +156,17 @@ impl NodeStore {
 }
 
 impl NodeStore {
+	pub(crate) fn new_return(&mut self) -> NodeId {
+		let nx = self.data.insert(Node::new(Expr::Return, ValueType::Unit));
+		nx
+	}
+
 	pub(crate) fn new_block(&mut self, body: Option<NodeId>, scope: Scope, info: TokenInfo) -> NodeId {
 		let kind = body.and_then(|bx| self.data.get(bx))
 			.map(|n| n.kind.clone())
 			.unwrap_or(ValueType::Unit);
-		let nx = self.data.insert(Node::new(Expr::Block, kind, info));
+		let nx = self.data.insert(Node::new(Expr::Block, kind));
+		self.info.insert(nx, info);
 		if let Some(bx) = body {
 			self.inputs.insert(nx, vec![bx]);
 		}
@@ -140,7 +175,9 @@ impl NodeStore {
 	}
 
 	pub(crate) fn new_bool(&mut self, b: bool, info: TokenInfo) -> NodeId {
-		let nx = self.data.insert(Node::new(Expr::Bool, ValueType::Bool, info));
+		let nx = self.data.insert(Node::new(Expr::Bool, ValueType::Bool));
+		self.info.insert(nx, info);
+		self.inputs.insert(nx, vec![self.start]);
 		self.bools.insert(nx, b);
 		nx
 	}
@@ -150,7 +187,8 @@ impl NodeStore {
 		id: Rc<str>,
 		info: TokenInfo,
 	) -> NodeId {
-		let nx = self.data.insert(Node::new(Expr::Id, ValueType::Any, info));
+		let nx = self.data.insert(Node::new(Expr::Id, ValueType::Any));
+		self.info.insert(nx, info);
 		self.names.insert(nx, id);
 		nx
 	}
@@ -161,7 +199,9 @@ impl NodeStore {
 		kind: ValueType,
 		info: TokenInfo,
 	) -> NodeId {
-		let nx = self.data.insert(Node::new(Expr::Num, kind, info));
+		let nx = self.data.insert(Node::new(Expr::Num, kind));
+		self.info.insert(nx, info);
+		self.inputs.insert(nx, vec![self.start]);
 		self.numbers.insert(nx, num);
 		nx
 	}
@@ -174,7 +214,8 @@ impl NodeStore {
 	) -> NodeId {
 		let udt = Rc::clone(name);
 		let name = Rc::clone(name);
-		let nx = self.data.insert(Node::new(Expr::Rec, ValueType::Udt(udt), info));
+		let nx = self.data.insert(Node::new(Expr::Rec, ValueType::Udt(udt)));
+		self.info.insert(nx, info);
 		self.names.insert(nx, name);
 		self.paramlists.insert(nx, fields);
 		nx
@@ -189,7 +230,8 @@ impl NodeStore {
 		info: TokenInfo,
 	) -> NodeId {
 		let kind = rtype.clone();
-		let nx = self.data.insert(Node::new(Expr::Fun, kind, info));
+		let nx = self.data.insert(Node::new(Expr::Fun, kind));
+		self.info.insert(nx, info);
 		self.names.insert(nx, Rc::clone(name));
 		self.paramlists.insert(nx, params);
 		self.types.insert(nx, rtype);
@@ -209,7 +251,8 @@ impl NodeStore {
 			tkind.meet(self.get(nx).kind())
 		}).unwrap_or(ValueType::Unit);
 
-		let nx = self.data.insert(Node::new(Expr::If, kind, info));
+		let nx = self.data.insert(Node::new(Expr::If, kind));
+		self.info.insert(nx, info);
 		let mut inputs = vec![cond, bt];
 		if let Some(bx) = bf {
 			inputs.push(bx);
@@ -224,7 +267,8 @@ impl NodeStore {
 		body: NodeId,
 		info: TokenInfo,
 	) -> NodeId {
-		let nx = self.data.insert(Node::new(Expr::While, ValueType::Unit, info));
+		let nx = self.data.insert(Node::new(Expr::While, ValueType::Unit));
+		self.info.insert(nx, info);
 		self.inputs.insert(nx, vec![cond, body]);
 		nx
 	}
@@ -235,7 +279,8 @@ impl NodeStore {
 		field_inits: Vec<(Rc<str>, NodeId)>,
 		info: TokenInfo,
 	) -> NodeId {
-		let nx = self.data.insert(Node::new(Expr::RecInit, ValueType::Udt(Rc::clone(name)), info));
+		let nx = self.data.insert(Node::new(Expr::RecInit, ValueType::Udt(Rc::clone(name))));
+		self.info.insert(nx, info);
 		self.names.insert(nx, Rc::clone(name));
 		self.arglists.insert(nx, field_inits);
 		nx
@@ -248,7 +293,8 @@ impl NodeStore {
 		info: TokenInfo,
 	) -> miette::Result<NodeId> {
 		let kind = self.get(rhs).kind().clone();
-		let nx = self.data.insert(Node::new(Expr::Unary, kind, info));
+		let nx = self.data.insert(Node::new(Expr::Unary, kind));
+		self.info.insert(nx, info);
 		self.unary_ops.insert(nx, op);
 		self.inputs.insert(nx, vec![rhs]);
 		Ok(nx)
@@ -264,7 +310,8 @@ impl NodeStore {
 		let lhs_kind = self.get(lhs).kind().clone();
 		let rhs_kind = self.get(rhs).kind().clone();
 		let kind = lhs_kind.meet(&rhs_kind);
-		let nx = self.data.insert(Node::new(Expr::Binary, kind, info));
+		let nx = self.data.insert(Node::new(Expr::Binary, kind));
+		self.info.insert(nx, info);
 		self.binary_ops.insert(nx, op);
 		self.inputs.insert(nx, vec![lhs, rhs]);
 		Ok(nx)
@@ -277,7 +324,8 @@ impl NodeStore {
 		info: TokenInfo,
 	) -> NodeId {
 		let name = Rc::clone(name);
-		let nx = self.data.insert(Node::new(Expr::FnCall, ValueType::Any, info));
+		let nx = self.data.insert(Node::new(Expr::FnCall, ValueType::Any));
+		self.info.insert(nx, info);
 		self.names.insert(nx, name);
 		self.inputs.insert(nx, args);
 		nx
@@ -293,7 +341,8 @@ impl NodeStore {
 		let kind = lnode.kind().meet(&rnode.kind());
 		let start = lnode.info().start.min(rnode.info().start);
 		let end = lnode.info().end.max(rnode.info().end);
-		let nx = self.data.insert(Node::new(Expr::Phi, kind, start..end));
+		let nx = self.data.insert(Node::new(Expr::Phi, kind));
+		self.info.insert(nx, start..end);
 		self.inputs.insert(nx, vec![lhs, rhs]);
 		Ok(nx)
 	}
@@ -306,6 +355,8 @@ impl NodeStore {
 				out.push(format!("[{nx:3?}] {space}> {node:?}"));
 				padding += 1;
 				match &node.expr {
+					Expr::Start => {}
+					Expr::Return => {}
 					Expr::Block => if let Some(body) = self.inputs.get(nx) {
 						self.nodes_to_string(body[0], padding, out);
 					}
@@ -375,7 +426,6 @@ impl NodeStore {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Node {
-	pub(crate) info: TokenInfo,
 	pub(crate) kind: ValueType,
 	pub(crate) expr: Expr,
 }
@@ -387,13 +437,16 @@ impl PartialEq for Node {
 }
 
 impl Node {
-	pub(crate) fn new(expr: Expr, kind: ValueType, info: TokenInfo) -> Self {
-		Self { info, kind, expr }
+	pub(crate) fn new(expr: Expr, kind: ValueType) -> Self {
+		Self { kind, expr }
 	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Expr {
+	Start,
+	Return,
+
 	Num,
 	Id,
 	Bool,
@@ -413,6 +466,8 @@ pub(crate) enum Expr {
 impl NodeRef<'_> {
 	pub fn is_const(&self) -> bool {
 		match self.expr() {
+			Expr::Start => false,
+			Expr::Return => false,
 			Expr::Num => true,
 			Expr::Bool => true,
 			Expr::Phi => {
@@ -450,12 +505,6 @@ impl NodeRef<'_> {
 	}
 }
 
-impl PartialEq for NodeRef<'_> {
-	fn eq(&self, _rhs: &NodeRef<'_>) -> bool {
-		todo!()
-	}
-}
-
 impl fmt::Debug for NodeRef<'_> {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
 		write!(fmt, "{self}")
@@ -465,6 +514,8 @@ impl fmt::Debug for NodeRef<'_> {
 impl fmt::Display for NodeRef<'_> {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
 		match self.expr() {
+			Expr::Start => write!(fmt, "(start)"),
+			Expr::Return => write!(fmt, "(return)"),
 			Expr::Block => {
 				let scope = self.scope().keys()
 					.map(|name| name.to_string())

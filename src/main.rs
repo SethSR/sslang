@@ -157,8 +157,7 @@ fn main() -> miette::Result<()> {
 
 	// let output = format!("AST: {out:?}");
 
-	let start_node = out.store.get(out.start);
-	let output = visualizer::to_mermaid(&start_node);
+	let output = visualizer::to_mermaid(&out.store);
 	let out_file_name = format!("{}.md", out_file_name);
 
 	// std::fs::write("test.out", output)

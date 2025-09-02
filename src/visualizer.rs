@@ -1,75 +1,82 @@
 
-use crate::parser::{Expr, NodeRef};
+use crate::parser::{Expr, NodeStore};
 
-pub(crate) fn to_mermaid(node: &NodeRef) -> String {
-	return format!("\n```mermaid\nflowchart TD\n{}\n```\n",
-		nodes(node),
-		// edges(node),
-	);
+pub(crate) fn to_mermaid(graph: &NodeStore) -> String {
+	format!(r#"
+```mermaid
+flowchart BT
+{}
 
-	fn nodes(node: &NodeRef) -> String {
-		let mut out = vec![];
+{}
+```
+"#,
+		nodes(graph),
+		edges(graph),
+	)
+}
+
+fn nodes(graph: &NodeStore) -> String {
+	let mut out = vec![];
+	for node in graph.iter() {
 		match node.expr() {
+			Expr::Start => {
+				out.push(format!("{}[Start]", node.id()));
+			}
+			Expr::Return => {
+				out.push(format!("{}[Return]", node.id()));
+			}
 			Expr::Id => {
-				out.push(format!("{}{{ Id_{} }}", node.id(), node.name()));
+				out.push(format!("{}[Id_{}]", node.id(), node.name()));
 			}
 			Expr::Num => {
-				out.push(format!("{}[#{}]", node.id(), node.number()));
+				out.push(format!("{}([#{}])", node.id(), node.number()));
 			}
 			Expr::Bool => {
 				out.push(format!("{}[{}]", node.id(), node.boolean()));
 			}
 			Expr::Block => {
 				out.push(format!("{}[Region]", node.id()));
-				for nx in node.inputs() {
-					let in_node = node.input(*nx);
-					out.push(nodes(&in_node));
-					out.push(format!("{}-->{}", in_node.id(), node.id()));
-				}
 			}
 			Expr::Rec => todo!("record -> mermaid"),
 			Expr::Fun => todo!("function -> mermaid"),
 			Expr::Var => unreachable!("no variables in graph"),
 			Expr::If => {
 				out.push(format!("{}[If]", node.id()));
-				for nx in node.inputs() {
-					out.push(nodes(&node.input(*nx)));
-				}
 			}
 			Expr::While => {
 				out.push(format!("{}[While]", node.id()));
-				for nx in node.inputs() {
-					out.push(nodes(&node.input(*nx)));
-				}
 			}
 			Expr::RecInit => todo!("record initializer -> mermaid"),
 			Expr::Unary => {
 				out.push(format!("{}[\"\\{}\"]", node.id(), node.unary_op()));
-				for nx in node.inputs() {
-					let in_node = node.input(*nx);
-					out.push(nodes(&in_node));
-					out.push(format!("{}-->{}", in_node.id(), node.id()));
-				}
 			}
 			Expr::Binary => {
 				out.push(format!("{}[\"\\{}\"]", node.id(), node.binary_op()));
-				for nx in node.inputs() {
-					let in_node = node.input(*nx);
-					out.push(nodes(&in_node));
-					out.push(format!("{}-->{}", in_node.id(), node.id()));
-				}
 			}
 			Expr::FnCall => todo!("function call -> mermaid"),
 			Expr::Phi => {
 				out.push(format!("{}[Phi]", node.id()));
-				for nx in node.inputs() {
-					let in_node = node.input(*nx);
-					out.push(nodes(&in_node));
-					out.push(format!("{}-->{}", in_node.id(), node.id()));
-				}
 			}
 		}
-		out.join("\n")
 	}
+	out.join("\n")
+}
+
+fn edges(graph: &NodeStore) -> String {
+	let mut out = vec![];
+	for node in graph.iter() {
+		for nx in node.inputs() {
+			let in_node = node.input(*nx);
+			let arrow = match (in_node.expr(), node.expr()) {
+				(Expr::Start, Expr::Num) => "~~~",
+				(Expr::Start, _) | (_, Expr::Start) |
+				(Expr::Block, _) | (_, Expr::Block) |
+				(Expr::Return, _) | (_, Expr::Return) => "==>",
+				_ => "-->",
+			};
+			out.push(format!("{}{}{}", node.id(), arrow, in_node.id()));
+		}
+	}
+	out.join("\n")
 }
 

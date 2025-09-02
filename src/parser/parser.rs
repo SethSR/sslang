@@ -239,13 +239,16 @@ impl Parser {
 	}
 
 	pub fn finish(mut self) -> std::result::Result<super::Output, Error> {
-		let start = match self.values.pop() {
-			Some(StackValue::NodeId(start)) => start,
+		let block = match self.values.pop() {
+			Some(StackValue::NodeId(block)) => block,
 			value => return Err(error(&self, &format!("found value '{value:?}' instead of final block"))),
 		};
 
+		let ret = self.nodes.new_return();
+		self.nodes.inputs.insert(ret, vec![self.nodes.start, block]);
+
 		Ok(super::Output {
-			start,
+			start: ret,
 			store: self.nodes,
 			// records: self.rec_defs.keys().cloned().collect(),
 			// functions: self.fun_defs,
